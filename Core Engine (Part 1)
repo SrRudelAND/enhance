@@ -1,0 +1,418 @@
+#!/usr/bin/env python3
+"""
+MTG Proxy Enhancer - Core Processing Engine
+Optimized for performance and modularity
+"""
+
+import cv2
+import numpy as np
+import os
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional
+from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+@dataclass
+class EnhancementSettings:
+    """Data class for enhancement parameters"""
+    clip_limit: float = 2.0
+    gamma: float = 1.2
+    saturation: float = 1.0
+    brightness: float = 0.0
+    contrast: float = 1.0
+    vibrance: float = 0.0
+    warmth: float = 0.0
+    tint: float = 0.0
+    exposure: float = 0.0
+    highlights: float = 0.0
+    shadows: float = 0.0
+    whites: float = 0.0
+    blacks: float = 0.0
+    clarity: float = 0.0
+    preserve_black: bool = True
+    black_threshold: int = 15
+
+@dataclass
+class ImageStats:
+    """Image analysis statistics"""
+    mean_brightness: float
+    contrast_std: float
+    color_balance: List[float]
+    saturation_mean: float
+    is_dark: bool
+    is_bright: bool
+    is_low_contrast: bool
+    has_color_cast: bool
+    cast_type: Optional[str]
+
+class ImageAnalyzer:
+    """Optimized image analysis for automatic enhancement"""
+    
+    @staticmethod
+    def analyze_image(img: np.ndarray) -> Tuple[ImageStats, EnhancementSettings]:
+        """
+        Fast image analysis with vectorized operations
+        Returns: (stats, optimal_settings)
+        """
+        # Pre-compute color spaces once
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        
+        # Vectorized statistics
+        mean_brightness = float(np.mean(gray))
+        contrast_std = float(np.std(gray))
+        
+        # Color analysis
+        color_means = np.mean(img, axis=(0, 1))  # [B, G, R]
+        avg_color = np.mean(color_means)
+        color_cast_threshold = 15
+        
+        # Determine color cast
+        cast_type = None
+        has_color_cast = False
+        if color_means[0] > avg_color + color_cast_threshold:
+            cast_type = "blue"
+            has_color_cast = True
+        elif color_means[2] > avg_color + color_cast_threshold:
+            cast_type = "red"
+            has_color_cast = True
+        elif color_means[1] > avg_color + color_cast_threshold:
+            cast_type = "green"
+            has_color_cast = True
+        
+        # Saturation analysis
+        saturation_mean = float(np.mean(hsv[..., 1]))
+        
+        # Create stats object
+        stats = ImageStats(
+            mean_brightness=mean_brightness,
+            contrast_std=contrast_std,
+            color_balance=color_means.tolist(),
+            saturation_mean=saturation_mean,
+            is_dark=mean_brightness < 80,
+            is_bright=mean_brightness > 180,
+            is_low_contrast=contrast_std < 35,
+            has_color_cast=has_color_cast,
+            cast_type=cast_type
+        )
+        
+        # Generate optimal settings
+        settings = ImageAnalyzer._generate_settings(stats)
+        
+        return stats, settings
+    
+    @staticmethod
+    def _generate_settings(stats: ImageStats) -> EnhancementSettings:
+        """Generate optimal enhancement settings based on image stats"""
+        settings = EnhancementSettings()
+        
+        # Brightness/exposure adjustments
+        if stats.is_dark:
+            settings.exposure = 0.3
+            settings.shadows = 20
+            settings.brightness = 10
+        elif stats.is_bright:
+            settings.highlights = -15
+            settings.whites = -10
+        
+        # Contrast adjustments
+        if stats.is_low_contrast:
+            settings.clip_limit = 3.5
+            settings.contrast = 1.3
+            settings.clarity = 15
+        elif stats.contrast_std > 80:  # High contrast
+            settings.clip_limit = 1.0
+            settings.highlights = -20
+            settings.shadows = 15
+        
+        # Color cast corrections
+        if stats.has_color_cast:
+            if stats.cast_type == "blue":
+                settings.warmth = 15
+                settings.tint = -5
+            elif stats.cast_type == "red":
+                settings.warmth = -10
+                settings.tint = 5
+            elif stats.cast_type == "green":
+                settings.tint = -10
+        
+        # Saturation adjustments
+        if stats.saturation_mean < 60:  # Desaturated
+            settings.saturation = 1.2
+            settings.vibrance = 20
+        elif stats.saturation_mean > 180:  # Oversaturated
+            settings.saturation = 0.9
+            settings.vibrance = -10
+        
+        # Gamma based on brightness distribution
+        dark_ratio = np.sum(stats.mean_brightness < 64) / (256 * 256)  # Approximate
+        if dark_ratio > 0.6:
+            settings.gamma = 1.4
+        elif stats.mean_brightness > 192:
+            settings.gamma = 0.8
+        
+        return settings
+
+class ImageProcessor:
+    """Optimized image processing engine"""
+    
+    @staticmethod
+    def preserve_black_pixels(original: np.ndarray, enhanced: np.ndarray, 
+                            threshold: int = 15) -> np.ndarray:
+        """Efficiently preserve black pixels using vectorized operations"""
+        # Create boolean mask for black pixels
+        black_mask = np.all(original <= threshold, axis=2, keepdims=True)
+        
+        # Use numpy where for efficient conditional replacement
+        return np.where(black_mask, original, enhanced)
+    
+    @staticmethod
+    def apply_clahe(img: np.ndarray, clip_limit: float) -> np.ndarray:
+        """Apply CLAHE in LAB color space for better results"""
+        if clip_limit <= 0:
+            return img
+            
+        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        l_channel = lab[..., 0]
+        
+        # Apply CLAHE only to luminance channel
+        clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
+        l_enhanced = clahe.apply(l_channel)
+        
+        # Merge back
+        lab[..., 0] = l_enhanced
+        return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+    
+    @staticmethod
+    def apply_gamma_correction(img: np.ndarray, gamma: float) -> np.ndarray:
+        """Optimized gamma correction using lookup table"""
+        if abs(gamma - 1.0) < 0.001:
+            return img
+            
+        # Pre-compute lookup table
+        inv_gamma = 1.0 / gamma
+        lut = np.array([(i / 255.0) ** inv_gamma * 255 
+                       for i in range(256)], dtype=np.uint8)
+        
+        return cv2.LUT(img, lut)
+    
+    @staticmethod
+    def apply_tone_mapping(img: np.ndarray, highlights: float, shadows: float, 
+                          whites: float, blacks: float) -> np.ndarray:
+        """Advanced tone mapping with optimized calculations"""
+        if all(x == 0 for x in [highlights, shadows, whites, blacks]):
+            return img
+        
+        # Work in float32 for precision
+        img_float = img.astype(np.float32) / 255.0
+        
+        # Calculate luminance once
+        luminance = 0.299 * img_float[..., 2] + 0.587 * img_float[..., 1] + 0.114 * img_float[..., 0]
+        
+        # Apply tone adjustments efficiently
+        if highlights != 0:
+            highlight_mask = luminance ** 2
+            adjustment = 1.0 + (highlights / 100.0)
+            img_float = img_float * (1.0 - highlight_mask[..., np.newaxis]) + \
+                       img_float * adjustment * highlight_mask[..., np.newaxis]
+        
+        if shadows != 0:
+            shadow_mask = 1.0 - luminance
+            adjustment = 1.0 + (shadows / 100.0)
+            img_float = img_float * (1.0 - shadow_mask[..., np.newaxis]) + \
+                       img_float * adjustment * shadow_mask[..., np.newaxis]
+        
+        # Whites and blacks adjustments
+        if whites != 0:
+            white_mask = luminance ** 2
+            adjustment = 1.0 + (whites / 100.0)
+            img_float = img_float * (1.0 - white_mask[..., np.newaxis]) + \
+                       img_float * adjustment * white_mask[..., np.newaxis]
+        
+        if blacks != 0:
+            black_mask = 1.0 - np.sqrt(luminance)
+            adjustment = 1.0 + (blacks / 100.0)
+            img_float = img_float * (1.0 - black_mask[..., np.newaxis]) + \
+                       img_float * adjustment * black_mask[..., np.newaxis]
+        
+        return np.clip(img_float * 255.0, 0, 255).astype(np.uint8)
+    
+    @staticmethod
+    def apply_color_adjustments(img: np.ndarray, saturation: float, vibrance: float,
+                              warmth: float, tint: float) -> np.ndarray:
+        """Optimized color adjustments in HSV space"""
+        if all(x in [1.0, 0.0] for x in [saturation, vibrance, warmth, tint]):
+            return img
+        
+        # Convert to HSV for color adjustments
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV).astype(np.float32)
+        
+        # Saturation
+        if saturation != 1.0:
+            hsv[..., 1] *= saturation
+        
+        # Vibrance (affects less saturated pixels more)
+        if vibrance != 0:
+            current_sat = hsv[..., 1] / 255.0
+            vibrance_factor = 1.0 + (vibrance / 100.0) * (1.0 - current_sat)
+            hsv[..., 1] *= vibrance_factor
+        
+        # Warmth (hue shift)
+        if warmth != 0:
+            hsv[..., 0] = (hsv[..., 0] + warmth * 0.5) % 180
+        
+        # Clip saturation
+        hsv[..., 1] = np.clip(hsv[..., 1], 0, 255)
+        
+        result = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+        
+        # Tint adjustment in BGR space
+        if tint != 0:
+            if tint > 0:  # More magenta
+                result[..., [0, 2]] = np.clip(result[..., [0, 2]] + tint, 0, 255)
+            else:  # More green
+                result[..., 1] = np.clip(result[..., 1] - tint, 0, 255)
+        
+        return result
+
+class MTGProxyEnhancer:
+    """Main enhancer class with optimized processing pipeline"""
+    
+    SUPPORTED_FORMATS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif'}
+    
+    def __init__(self, input_folder: str = "mtgproxy/Input", 
+                 output_folder: str = "mtgproxy/Output"):
+        self.input_folder = Path(input_folder)
+        self.output_folder = Path(output_folder)
+        self.stop_processing = False
+        self.is_processing = False
+        
+        self._setup_folders()
+        self.images = self._load_image_list()
+        
+    def _setup_folders(self) -> None:
+        """Create folders if they don't exist"""
+        self.input_folder.mkdir(parents=True, exist_ok=True)
+        self.output_folder.mkdir(parents=True, exist_ok=True)
+        
+    def _load_image_list(self) -> List[str]:
+        """Load list of supported image files"""
+        images = []
+        for ext in self.SUPPORTED_FORMATS:
+            # Case-insensitive search
+            images.extend([f.name for f in self.input_folder.glob(f"*{ext}") + 
+                          self.input_folder.glob(f"*{ext.upper()}")])
+        
+        logger.info(f"Found {len(images)} images in {self.input_folder}")
+        return sorted(list(set(images)))  # Remove duplicates and sort
+    
+    def enhance_image(self, img: np.ndarray, settings: EnhancementSettings) -> np.ndarray:
+        """
+        Optimized enhancement pipeline with minimal memory allocation
+        """
+        original = img.copy()
+        
+        # 1. Exposure adjustment (early in pipeline for better results)
+        if settings.exposure != 0:
+            img = (img.astype(np.float32) * (2.0 ** settings.exposure)).clip(0, 255).astype(np.uint8)
+        
+        # 2. Tone mapping
+        img = ImageProcessor.apply_tone_mapping(
+            img, settings.highlights, settings.shadows, settings.whites, settings.blacks
+        )
+        
+        # 3. Basic adjustments
+        if settings.brightness != 0 or settings.contrast != 1.0:
+            img = cv2.convertScaleAbs(img, alpha=settings.contrast, beta=settings.brightness)
+        
+        # 4. Gamma correction
+        img = ImageProcessor.apply_gamma_correction(img, settings.gamma)
+        
+        # 5. CLAHE for adaptive contrast
+        img = ImageProcessor.apply_clahe(img, settings.clip_limit)
+        
+        # 6. Color adjustments
+        img = ImageProcessor.apply_color_adjustments(
+            img, settings.saturation, settings.vibrance, settings.warmth, settings.tint
+        )
+        
+        # 7. Clarity (local contrast enhancement)
+        if settings.clarity != 0:
+            gaussian = cv2.GaussianBlur(img, (0, 0), 2.0)
+            img = cv2.addWeighted(img, 1.0 + settings.clarity/100.0, 
+                                gaussian, -settings.clarity/100.0, 0)
+            img = np.clip(img, 0, 255).astype(np.uint8)
+        
+        # 8. Preserve black pixels (MTG-specific)
+        if settings.preserve_black:
+            img = ImageProcessor.preserve_black_pixels(original, img, settings.black_threshold)
+        
+        return img
+    
+    def auto_enhance_image(self, img: np.ndarray) -> Tuple[np.ndarray, EnhancementSettings, List[str]]:
+        """
+        Automatically enhance image using AI-like analysis
+        Returns: (enhanced_image, settings_used, analysis_notes)
+        """
+        stats, settings = ImageAnalyzer.analyze_image(img)
+        enhanced = self.enhance_image(img, settings)
+        
+        # Generate analysis notes
+        notes = []
+        if stats.is_dark:
+            notes.append("Dark image: increased exposure and shadows")
+        if stats.is_bright:
+            notes.append("Bright image: reduced highlights")
+        if stats.is_low_contrast:
+            notes.append("Low contrast: increased CLAHE and clarity")
+        if stats.has_color_cast:
+            notes.append(f"{stats.cast_type.title()} color cast: corrected")
+        if stats.saturation_mean < 60:
+            notes.append("Low saturation: increased vibrance")
+        
+        return enhanced, settings, notes
+    
+    def process_single_image(self, filename: str, settings: EnhancementSettings, 
+                           overwrite: bool = True) -> bool:
+        """
+        Process a single image with error handling
+        Returns: success status
+        """
+        try:
+            input_path = self.input_folder / filename
+            output_path = self.output_folder / filename
+            
+            # Check if file exists and overwrite policy
+            if output_path.exists() and not overwrite:
+                logger.info(f"Skipping {filename} (already exists)")
+                return False
+            
+            # Load and process image
+            img = cv2.imread(str(input_path))
+            if img is None:
+                logger.error(f"Could not load {filename}")
+                return False
+            
+            # Enhance image
+            enhanced = self.enhance_image(img, settings)
+            
+            # Save with high quality
+            success = cv2.imwrite(str(output_path), enhanced, 
+                                [cv2.IMWRITE_JPEG_QUALITY, 95,
+                                 cv2.IMWRITE_PNG_COMPRESSION, 1])
+            
+            if success:
+                logger.debug(f"Successfully processed {filename}")
+                return True
+            else:
+                logger.error(f"Failed to save {filename}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error processing {filename}: {e}")
+            return False
