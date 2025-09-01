@@ -1,0 +1,671 @@
+#!/usr/bin/env python3
+"""
+MTG Proxy Enhancer - Interactive Interface Components
+Continuation from Part 2
+"""
+
+import matplotlib.pyplot as plt
+from matplotlib.widgets import Slider, Button as MPLButton, CheckButtons
+import matplotlib.patches as patches
+from IPython.display import display, clear_output
+from ipywidgets import (interact, FloatSlider, IntSlider, Checkbox, Button, 
+                       VBox, HBox, Output, HTML, Label, Dropdown, Tab)
+
+class InteractiveInterface:
+    """Optimized interactive interface with better UX"""
+    
+    def __init__(self, enhancer: MTGProxyEnhancer):
+        self.enhancer = enhancer
+        self.batch_processor = BatchProcessor(enhancer)
+        self.current_image_idx = 0
+        self.current_settings = EnhancementSettings()
+        
+    def create_comparison_view(self, original: np.ndarray, enhanced: np.ndarray, 
+                             blend_ratio: float = 0.5) -> np.ndarray:
+        """Create optimized blended comparison"""
+        if blend_ratio <= 0.02:
+            return original
+        elif blend_ratio >= 0.98:
+            return enhanced
+        else:
+            return cv2.addWeighted(original, 1-blend_ratio, enhanced, blend_ratio, 0)
+    
+    def get_current_image(self) -> Optional[np.ndarray]:
+        """Load current image with caching"""
+        if not self.enhancer.images or self.current_image_idx >= len(self.enhancer.images):
+            return None
+            
+        filename = self.enhancer.images[self.current_image_idx]
+        path = self.enhancer.input_folder / filename
+        
+        return cv2.imread(str(path))
+    
+    def create_preview_plot(self, comparison_ratio: float = 0.5, 
+                          show_stats: bool = False) -> None:
+        """Create optimized preview with better layout"""
+        img = self.get_current_image()
+        if img is None:
+            print("No image available for preview")
+            return
+        
+        # Enhance current image
+        enhanced = self.enhancer.enhance_image(img, self.current_settings)
+        comparison = self.create_comparison_view(img, enhanced, comparison_ratio)
+        
+        # Convert to RGB for display
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        enhanced_rgb = cv2.cvtColor(enhanced, cv2.COLOR_BGR2RGB)
+        comparison_rgb = cv2.cvtColor(comparison, cv2.COLOR_BGR2RGB)
+        
+        # Create optimized figure layout
+        fig = plt.figure(figsize=(18, 10))
+        gs = fig.add_gridspec(2, 3, height_ratios=[3, 1], width_ratios=[1, 1, 1])
+        
+        # Main image displays
+        ax1 = fig.add_subplot(gs[0, 0])
+        ax2 = fig.add_subplot(gs[0, 1]) 
+        ax3 = fig.add_subplot(gs[0, 2])
+        
+        ax1.imshow(img_rgb)
+        ax1.set_title("Original", fontsize=14, fontweight='bold')
+        ax1.axis('off')
+        
+        ax2.imshow(enhanced_rgb)
+        ax2.set_title("Enhanced", fontsize=14, fontweight='bold')
+        ax2.axis('off')
+        
+        ax3.imshow(comparison_rgb)
+        if comparison_ratio <= 0.02:
+            title = "100% Original"
+        elif comparison_ratio >= 0.98:
+            title = "100% Enhanced"
+        else:
+            title = f"Blend: {comparison_ratio*100:.0f}% Enhanced"
+        ax3.set_title(title, fontsize=14, fontweight='bold')
+        ax3.axis('off')
+        
+        # Settings and stats panel
+        ax_info = fig.add_subplot(gs[1, :])
+        ax_info.axis('off')
+        
+        # Format settings display
+        filename = self.enhancer.images[self.current_image_idx]
+        settings_text = self._format_settings_display(filename, img.shape, show_stats, img, enhanced)
+        
+        ax_info.text(0.02, 0.95, settings_text, transform=ax_info.transAxes,
+                    fontsize=10, verticalalignment='top', fontfamily='monospace',
+                    bbox=dict(boxstyle="round,pad=0.5", facecolor="#f0f0f0", alpha=0.9))
+        
+        plt.tight_layout()
+        plt.show()
+    
+    def _format_settings_display(self, filename: str, img_shape: tuple, 
+                               show_stats: bool, original: np.ndarray, 
+                               enhanced: np.ndarray) -> str:
+        """Format settings display text efficiently"""
+        s = self.current_settings
+        
+        settings_text = f"""🃏 MTG Proxy Enhancement Settings
+
+📁 File: {filename} | 📐 Size: {img_shape[1]}x{img_shape[0]} | 🖼️ Image: {self.current_image_idx+1}/{len(self.enhancer.images)}
+
+🔧 BASIC ADJUSTMENTS:
+CLAHE: {s.clip_limit:.1f} | Gamma: {s.gamma:.2f} | Brightness: {s.brightness:+.0f} | Contrast: {s.contrast:.2f}
+
+🎨 COLOR ENHANCEMENT:
+Saturation: {s.saturation:.2f} | Vibrance: {s.vibrance:+.0f} | Warmth: {s.warmth:+.0f} | Tint: {s.tint:+.0f}
+
+🌅 TONE MAPPING:
+Exposure: {s.exposure:+.1f} | Highlights: {s.highlights:+.0f} | Shadows: {s.shadows:+.0f} | Clarity: {s.clarity:+.0f}
+
+⚫ BLACK PRESERVATION: {s.preserve_black} (Threshold: {s.black_threshold})"""
+        
+        if show_stats:
+            orig_brightness = float(np.mean(original))
+            enh_brightness = float(np.mean(enhanced))
+            orig_contrast = float(np.std(original))
+            enh_contrast = float(np.std(enhanced))
+            
+            settings_text += f"""
+
+📊 STATISTICS:
+Original → Brightness: {orig_brightness:.1f}, Contrast: {orig_contrast:.1f}
+Enhanced → Brightness: {enh_brightness:.1f}, Contrast: {enh_contrast:.1f}
+Change   → Brightness: {enh_brightness-orig_brightness:+.1f}, Contrast: {enh_contrast-orig_contrast:+.1f}"""
+        
+        return settings_text
+    
+    def create_widget_interface(self):
+        """Create comprehensive widget-based interface"""
+        if not self.enhancer.images:
+            return HTML("<h3>❌ No images found. Add images to input folder first.</h3>")
+        
+        # Navigation widgets
+        prev_btn = Button(description="◀ Previous", button_style='info', 
+                         layout={'width': '100px'})
+        next_btn = Button(description="Next ▶", button_style='info', 
+                         layout={'width': '100px'})
+        image_info = HTML(f"<b>Image 1 of {len(self.enhancer.images)}</b>: {self.enhancer.images[0]}")
+        
+        # Preset selection
+        presets = SettingsManager.create_preset_settings()
+        preset_dropdown = Dropdown(
+            options=list(presets.keys()),
+            value='default',
+            description='Preset:',
+            style={'description_width': '80px'}
+        )
+        
+        # Basic controls (optimized ranges)
+        basic_controls = [
+            FloatSlider(2.0, 0.5, 8.0, 0.1, description="CLAHE", 
+                       style={'description_width': '100px'}, layout={'width': '280px'}),
+            FloatSlider(1.2, 0.5, 3.0, 0.05, description="Gamma",
+                       style={'description_width': '100px'}, layout={'width': '280px'}),
+            FloatSlider(0, -50, 50, 1, description="Brightness",
+                       style={'description_width': '100px'}, layout={'width': '280px'}),
+            FloatSlider(1.0, 0.5, 2.5, 0.05, description="Contrast",
+                       style={'description_width': '100px'}, layout={'width': '280px'})
+        ]
+        
+        # Color controls
+        color_controls = [
+            FloatSlider(1.0, 0.0, 3.0, 0.05, description="Saturation",
+                       style={'description_width': '100px'}, layout={'width': '280px'}),
+            FloatSlider(0, -50, 50, 1, description="Vibrance",
+                       style={'description_width': '100px'}, layout={'width': '280px'}),
+            FloatSlider(0, -30, 30, 1, description="Warmth",
+                       style={'description_width': '100px'}, layout={'width': '280px'}),
+            FloatSlider(0, -30, 30, 1, description="Tint",
+                       style={'description_width': '100px'}, layout={'width': '280px'})
+        ]
+        
+        # Tone controls
+        tone_controls = [
+            FloatSlider(0, -2.0, 2.0, 0.1, description="Exposure",
+                       style={'description_width': '100px'}, layout={'width': '280px'}),
+            FloatSlider(0, -50, 50, 1, description="Highlights",
+                       style={'description_width': '100px'}, layout={'width': '280px'}),
+            FloatSlider(0, -50, 50, 1, description="Shadows",
+                       style={'description_width': '100px'}, layout={'width': '280px'}),
+            FloatSlider(0, -50, 50, 1, description="Clarity",
+                       style={'description_width': '100px'}, layout={'width': '280px'})
+        ]
+        
+        # Options
+        comparison_slider = FloatSlider(0.5, 0.0, 1.0, 0.01, 
+                                       description="Original ↔ Enhanced",
+                                       style={'description_width': '150px'}, 
+                                       layout={'width': '400px'})
+        
+        preserve_black = Checkbox(True, description="Preserve Black Pixels")
+        black_threshold = IntSlider(15, 5, 50, 1, description="Black Threshold",
+                                   style={'description_width': '120px'})
+        show_stats = Checkbox(False, description="Show Statistics")
+        
+        # Action buttons
+        auto_btn = Button(description="🎯 Auto Enhance", button_style='primary')
+        reset_btn = Button(description="🔄 Reset", button_style='warning')
+        save_settings_btn = Button(description="💾 Save Settings", button_style='info')
+        
+        # Batch processing
+        process_btn = Button(description="🚀 Process All", button_style='success',
+                           layout={'width': '150px', 'height': '35px'})
+        auto_process_btn = Button(description="🤖 Auto Process All", button_style='primary',
+                                layout={'width': '150px', 'height': '35px'})
+        stop_btn = Button(description="⏹️ Stop", button_style='danger',
+                         layout={'width': '100px', 'height': '35px'}, disabled=True)
+        
+        # Output areas
+        preview_output = Output()
+        batch_output = Output()
+        
+        # Event handlers
+        def update_settings_from_widgets():
+            """Update current settings from widget values"""
+            self.current_settings = EnhancementSettings(
+                clip_limit=basic_controls[0].value,
+                gamma=basic_controls[1].value,
+                brightness=basic_controls[2].value,
+                contrast=basic_controls[3].value,
+                saturation=color_controls[0].value,
+                vibrance=color_controls[1].value,
+                warmth=color_controls[2].value,
+                tint=color_controls[3].value,
+                exposure=tone_controls[0].value,
+                highlights=tone_controls[1].value,
+                shadows=tone_controls[2].value,
+                clarity=tone_controls[3].value,
+                preserve_black=preserve_black.value,
+                black_threshold=black_threshold.value
+            )
+        
+        def update_preview():
+            """Update preview display"""
+            update_settings_from_widgets()
+            with preview_output:
+                clear_output(wait=True)
+                self.create_preview_plot(comparison_slider.value, show_stats.value)
+        
+        def on_navigation(direction):
+            """Handle image navigation"""
+            if direction == "prev":
+                self.current_image_idx = max(0, self.current_image_idx - 1)
+            else:
+                self.current_image_idx = min(len(self.enhancer.images) - 1, 
+                                           self.current_image_idx + 1)
+            
+            filename = self.enhancer.images[self.current_image_idx]
+            image_info.value = f"<b>Image {self.current_image_idx + 1} of {len(self.enhancer.images)}</b>: {filename}"
+            update_preview()
+        
+        def on_preset_change(change):
+            """Apply preset settings"""
+            if change['type'] == 'change' and change['name'] == 'value':
+                presets = SettingsManager.create_preset_settings()
+                preset_settings = presets[change['new']]
+                
+                # Update all widgets with preset values
+                basic_controls[0].value = preset_settings.clip_limit
+                basic_controls[1].value = preset_settings.gamma
+                basic_controls[2].value = preset_settings.brightness
+                basic_controls[3].value = preset_settings.contrast
+                color_controls[0].value = preset_settings.saturation
+                color_controls[1].value = preset_settings.vibrance
+                color_controls[2].value = preset_settings.warmth
+                color_controls[3].value = preset_settings.tint
+                tone_controls[0].value = preset_settings.exposure
+                tone_controls[1].value = preset_settings.highlights
+                tone_controls[2].value = preset_settings.shadows
+                tone_controls[3].value = preset_settings.clarity
+                preserve_black.value = preset_settings.preserve_black
+                black_threshold.value = preset_settings.black_threshold
+        
+        def on_auto_enhance(b):
+            """Apply automatic enhancement"""
+            img = self.get_current_image()
+            if img is not None:
+                enhanced, settings, notes = self.enhancer.auto_enhance_image(img)
+                
+                # Update widgets with auto settings
+                self.current_settings = settings
+                self._update_widgets_from_settings(settings)
+                
+                print("🎯 Auto-enhancement applied!")
+                for note in notes:
+                    print(f"  • {note}")
+                
+                update_preview()
+        
+        def on_reset(b):
+            """Reset to default settings"""
+            default_settings = EnhancementSettings()
+            self._update_widgets_from_settings(default_settings)
+            update_preview()
+        
+        def on_save_settings(b):
+            """Save current settings to file"""
+            update_settings_from_widgets()
+            SettingsManager.save_settings(self.current_settings)
+            print("💾 Settings saved successfully!")
+        
+        def on_process_all(b):
+            """Process all images with current settings"""
+            update_settings_from_widgets()
+            process_btn.disabled = True
+            stop_btn.disabled = False
+            
+            with batch_output:
+                clear_output()
+                results = self.batch_processor.batch_process_threaded(self.current_settings)
+            
+            process_btn.disabled = False
+            stop_btn.disabled = True
+        
+        def on_auto_process_all(b):
+            """Auto-process all images"""
+            auto_process_btn.disabled = True
+            stop_btn.disabled = False
+            
+            with batch_output:
+                clear_output()
+                results = self.batch_processor.auto_batch_process()
+            
+            auto_process_btn.disabled = False
+            stop_btn.disabled = True
+        
+        def on_stop(b):
+            """Stop batch processing"""
+            self.batch_processor.stop_processing()
+            process_btn.disabled = False
+            auto_process_btn.disabled = False
+            stop_btn.disabled = True
+        
+        # Connect event handlers
+        prev_btn.on_click(lambda b: on_navigation("prev"))
+        next_btn.on_click(lambda b: on_navigation("next"))
+        preset_dropdown.observe(on_preset_change)
+        auto_btn.on_click(on_auto_enhance)
+        reset_btn.on_click(on_reset)
+        save_settings_btn.on_click(on_save_settings)
+        process_btn.on_click(on_process_all)
+        auto_process_btn.on_click(on_auto_process_all)
+        stop_btn.on_click(on_stop)
+        
+        # Connect all sliders to update function
+        all_controls = basic_controls + color_controls + tone_controls + [
+            comparison_slider, preserve_black, black_threshold, show_stats
+        ]
+        for control in all_controls:
+            control.observe(lambda change: update_preview(), names='value')
+        
+        # Create tabbed interface for better organization
+        basic_tab = VBox([
+            HTML("<h4>🔧 Basic Adjustments</h4>"),
+            HBox([basic_controls[0], basic_controls[1]]),
+            HBox([basic_controls[2], basic_controls[3]])
+        ])
+        
+        color_tab = VBox([
+            HTML("<h4>🎨 Color Enhancement</h4>"),
+            HBox([color_controls[0], color_controls[1]]),
+            HBox([color_controls[2], color_controls[3]])
+        ])
+        
+        tone_tab = VBox([
+            HTML("<h4>🌅 Tone Mapping</h4>"),
+            HBox([tone_controls[0], tone_controls[1]]),
+            HBox([tone_controls[2], tone_controls[3]])
+        ])
+        
+        options_tab = VBox([
+            HTML("<h4>⚙️ Options & Actions</h4>"),
+            HBox([preserve_black, show_stats]),
+            black_threshold,
+            HBox([preset_dropdown]),
+            HBox([auto_btn, reset_btn, save_settings_btn])
+        ])
+        
+        # Create tabs
+        enhancement_tabs = Tab(children=[basic_tab, color_tab, tone_tab, options_tab])
+        enhancement_tabs.set_title(0, "Basic")
+        enhancement_tabs.set_title(1, "Color")
+        enhancement_tabs.set_title(2, "Tone")
+        enhancement_tabs.set_title(3, "Options")
+        
+        # Main layout
+        header = VBox([
+            HTML("<h1>🃏 Advanced MTG Proxy Enhancer - Optimized</h1>"),
+            HTML(f"<p><b>Input:</b> {self.enhancer.input_folder} | <b>Output:</b> {self.enhancer.output_folder}</p>")
+        ])
+        
+        navigation = VBox([
+            HTML("<h3>📸 Navigation</h3>"),
+            HBox([prev_btn, next_btn]),
+            image_info
+        ])
+        
+        comparison_section = VBox([
+            HTML("<h3>🔄 Live Comparison</h3>"),
+            comparison_slider,
+            HTML("<i>Drag to blend: Left=Original, Right=Enhanced</i>")
+        ])
+        
+        batch_section = VBox([
+            HTML("<h3>⚡ Batch Processing</h3>"),
+            HBox([process_btn, auto_process_btn, stop_btn]),
+            batch_output
+        ])
+        
+        # Complete interface
+        interface = VBox([
+            header,
+            navigation,
+            enhancement_tabs,
+            comparison_section,
+            preview_output,
+            batch_section
+        ])
+        
+        # Initial preview
+        update_preview()
+        
+        return interface
+    
+    def _update_widgets_from_settings(self, settings: EnhancementSettings):
+        """Helper to update widget values from settings object"""
+        # This would be called to sync widgets with settings
+        # Implementation depends on widget references
+        pass
+
+class CommandLineInterface:
+    """Optimized CLI for batch operations"""
+    
+    def __init__(self, enhancer: MTGProxyEnhancer):
+        self.enhancer = enhancer
+        self.batch_processor = BatchProcessor(enhancer)
+    
+    def run_interactive_cli(self):
+        """Run interactive command-line interface"""
+        print("🃏 MTG Proxy Enhancer - Interactive CLI")
+        print("=" * 50)
+        
+        while True:
+            print(f"\n📁 Images found: {len(self.enhancer.images)}")
+            print("\nSelect option:")
+            print("1. Auto-enhance all images")
+            print("2. Quick enhance with preset")
+            print("3. Custom enhancement settings")
+            print("4. Benchmark performance")
+            print("5. View image statistics")
+            print("0. Exit")
+            
+            try:
+                choice = input("\nEnter choice (0-5): ").strip()
+                
+                if choice == "0":
+                    print("👋 Goodbye!")
+                    break
+                elif choice == "1":
+                    self._cli_auto_enhance()
+                elif choice == "2":
+                    self._cli_preset_enhance()
+                elif choice == "3":
+                    self._cli_custom_enhance()
+                elif choice == "4":
+                    self._cli_benchmark()
+                elif choice == "5":
+                    self._cli_image_stats()
+                else:
+                    print("❌ Invalid choice")
+                    
+            except KeyboardInterrupt:
+                print("\n\n👋 Interrupted by user")
+                break
+            except Exception as e:
+                print(f"❌ Error: {e}")
+    
+    def _cli_auto_enhance(self):
+        """CLI auto enhancement"""
+        print("\n🤖 Starting auto-enhancement...")
+        results = self.batch_processor.auto_batch_process()
+        self._print_results(results)
+    
+    def _cli_preset_enhance(self):
+        """CLI preset enhancement"""
+        presets = SettingsManager.create_preset_settings()
+        
+        print("\n📋 Available presets:")
+        for i, preset_name in enumerate(presets.keys(), 1):
+            print(f"{i}. {preset_name}")
+        
+        try:
+            choice = int(input("Select preset number: ")) - 1
+            preset_names = list(presets.keys())
+            
+            if 0 <= choice < len(preset_names):
+                preset_name = preset_names[choice]
+                settings = presets[preset_name]
+                
+                print(f"\n🚀 Processing with '{preset_name}' preset...")
+                results = self.batch_processor.batch_process_threaded(settings)
+                self._print_results(results)
+            else:
+                print("❌ Invalid preset selection")
+                
+        except ValueError:
+            print("❌ Invalid input")
+    
+    def _cli_custom_enhance(self):
+        """CLI custom settings enhancement"""
+        print("\n⚙️ Custom Enhancement Settings")
+        settings = EnhancementSettings()
+        
+        # Get basic settings from user
+        try:
+            settings.clip_limit = float(input(f"CLAHE clip limit [{settings.clip_limit}]: ") or settings.clip_limit)
+            settings.gamma = float(input(f"Gamma [{settings.gamma}]: ") or settings.gamma)
+            settings.saturation = float(input(f"Saturation [{settings.saturation}]: ") or settings.saturation)
+            settings.brightness = float(input(f"Brightness [{settings.brightness}]: ") or settings.brightness)
+            
+            print(f"\n🚀 Processing with custom settings...")
+            results = self.batch_processor.batch_process_threaded(settings)
+            self._print_results(results)
+            
+        except ValueError:
+            print("❌ Invalid input - using default settings")
+            results = self.batch_processor.batch_process_threaded(settings)
+            self._print_results(results)
+    
+    def _cli_benchmark(self):
+        """CLI benchmark"""
+        print("\n⏱️ Running performance benchmark...")
+        results = benchmark_enhancement(str(self.enhancer.input_folder))
+        
+        if "error" in results:
+            print(f"❌ Benchmark failed: {results['error']}")
+        else:
+            print(f"📊 Benchmark Results:")
+            print(f"  Image size: {results['image_size']}")
+            print(f"  Average time: {results['avg_time_ms']:.1f}ms")
+            print(f"  Images/second: {results['images_per_second']:.1f}")
+            print(f"  Estimated batch time: {results['estimated_batch_time']:.1f}s")
+    
+    def _cli_image_stats(self):
+        """CLI image statistics"""
+        if not self.enhancer.images:
+            print("❌ No images found")
+            return
+        
+        print("\n📊 Image Statistics Analysis")
+        for i, filename in enumerate(self.enhancer.images[:5]):  # Limit to first 5
+            img_path = self.enhancer.input_folder / filename
+            img = cv2.imread(str(img_path))
+            
+            if img is not None:
+                stats, _ = ImageAnalyzer.analyze_image(img)
+                print(f"\n{i+1}. {filename}:")
+                print(f"   Brightness: {stats.mean_brightness:.1f}")
+                print(f"   Contrast: {stats.contrast_std:.1f}")
+                print(f"   Color cast: {stats.cast_type or 'None'}")
+                print(f"   Characteristics: {', '.join(self._get_image_characteristics(stats))}")
+        
+        if len(self.enhancer.images) > 5:
+            print(f"\n... and {len(self.enhancer.images) - 5} more images")
+    
+    def _get_image_characteristics(self, stats: ImageStats) -> List[str]:
+        """Get human-readable image characteristics"""
+        characteristics = []
+        if stats.is_dark:
+            characteristics.append("Dark")
+        if stats.is_bright:
+            characteristics.append("Bright")
+        if stats.is_low_contrast:
+            characteristics.append("Low contrast")
+        if stats.has_color_cast:
+            characteristics.append(f"{stats.cast_type} cast")
+        return characteristics or ["Normal"]
+    
+    def _print_results(self, results: Dict):
+        """Print batch processing results"""
+        print(f"\n✅ Processing complete!")
+        print(f"   Success: {results['success']} images")
+        if results.get('skipped', 0) > 0:
+            print(f"   Skipped: {results['skipped']} images")
+        if results.get('errors', 0) > 0:
+            print(f"   Errors: {results['errors']} images")
+        print(f"   Time: {results['time']:.1f} seconds")
+
+# Enhanced utility functions with better error handling
+def create_mtg_enhancer_optimized(input_folder: str = "mtgproxy/Input", 
+                                 output_folder: str = "mtgproxy/Output") -> MTGProxyEnhancer:
+    """Create optimized MTG Proxy Enhancer with validation"""
+    try:
+        enhancer = MTGProxyEnhancer(input_folder, output_folder)
+        logger.info(f"Enhancer created successfully with {len(enhancer.images)} images")
+        return enhancer
+    except Exception as e:
+        logger.error(f"Failed to create enhancer: {e}")
+        raise
+
+def run_cli_interface(input_folder: str = "mtgproxy/Input", 
+                     output_folder: str = "mtgproxy/Output"):
+    """Run the command-line interface"""
+    enhancer = create_mtg_enhancer_optimized(input_folder, output_folder)
+    cli = CommandLineInterface(enhancer)
+    cli.run_interactive_cli()
+
+# Performance monitoring
+class PerformanceMonitor:
+    """Monitor and optimize performance"""
+    
+    @staticmethod
+    def profile_enhancement_pipeline(img: np.ndarray, settings: EnhancementSettings) -> Dict:
+        """Profile each step of the enhancement pipeline"""
+        import time
+        
+        steps = {}
+        enhancer = MTGProxyEnhancer()
+        
+        # Time each major step
+        start = time.time()
+        ImageProcessor.apply_tone_mapping(img, settings.highlights, settings.shadows, 
+                                        settings.whites, settings.blacks)
+        steps['tone_mapping'] = time.time() - start
+        
+        start = time.time()
+        ImageProcessor.apply_gamma_correction(img, settings.gamma)
+        steps['gamma'] = time.time() - start
+        
+        start = time.time()
+        ImageProcessor.apply_clahe(img, settings.clip_limit)
+        steps['clahe'] = time.time() - start
+        
+        start = time.time()
+        ImageProcessor.apply_color_adjustments(img, settings.saturation, settings.vibrance,
+                                             settings.warmth, settings.tint)
+        steps['color'] = time.time() - start
+        
+        return steps
+
+# Main execution
+if __name__ == "__main__":
+    print("🃏 MTG Proxy Enhancer - Optimized Version Loaded!")
+    print("\n🚀 QUICK START:")
+    print("1. Place MTG images in 'mtgproxy/Input'")
+    print("2. Run: run_cli_interface()  # For CLI")
+    print("3. Or: enhancer = create_mtg_enhancer_optimized()")
+    print("4. Or: auto_enhance_all()  # One-click processing")
+    
+    # Auto-create default instance if images are present
+    try:
+        enhancer = create_mtg_enhancer_optimized()
+        if enhancer.images:
+            print(f"\n✅ Ready! Found {len(enhancer.images)} images")
+            print("Run: interface = InteractiveInterface(enhancer)")
+            print("     ui = interface.create_widget_interface()")
+            print("     display(ui)")
+        else:
+            print("\n📂 Add images to 'mtgproxy/Input' folder to get started")
+    except Exception as e:
+        logger.error(f"Initialization error: {e}")
