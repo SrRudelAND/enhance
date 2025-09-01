@@ -913,16 +913,16 @@ Change   → Brightness: {enh_brightness-orig_brightness:+.1f}, Contrast: {enh_c
         
         # Basic controls (optimized ranges)
         basic_controls = [
-            FloatSlider(2.0, 0.5, 8.0, 0.1, description="CLAHE", 
+            FloatSlider(value=2.0, min=0.5, max=8.0, step=0.1, description="CLAHE", 
                        style={'description_width': '100px'}, layout={'width': '280px'}),
-            FloatSlider(1.2, 0.5, 3.0, 0.05, description="Gamma",
+            FloatSlider(value=1.2, min=0.5, max=3.0, step=0.05, description="Gamma",
                        style={'description_width': '100px'}, layout={'width': '280px'}),
-            FloatSlider(0, -50, 50, 1, description="Brightness",
+            FloatSlider(value=0, min=-50, max=50, step=1, description="Brightness",
                        style={'description_width': '100px'}, layout={'width': '280px'}),
-            FloatSlider(1.0, 0.5, 2.5, 0.05, description="Contrast",
+            FloatSlider(value=1.0, min=0.5, max=2.5, step=0.05, description="Contrast",
                        style={'description_width': '100px'}, layout={'width': '280px'})
         ]
-        
+                
         # Color controls
         color_controls = [
             FloatSlider(1.0, 0.0, 3.0, 0.05, description="Saturation",
