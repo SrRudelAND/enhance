@@ -722,7 +722,7 @@ def benchmark_enhancement(input_folder: str = "mtgproxy/Input",
 # CLI interface helper
 def print_usage():
     """Print usage instructions"""
-    print("""
+    print(""""
 🃏 MTG Proxy Enhancer - Optimized Version
 
 QUICK START:
@@ -752,7 +752,7 @@ QUICK START:
 
 ⚡ PERFORMANCE:
 • Multi-threaded processing (4 workers by default)
-
+""")
 
 
 """
