@@ -1,0 +1,719 @@
+#!/usr/bin/env python3
+"""
+MTG Proxy Enhancer - Advanced Features and Utilities
+Continuation from Part 3 - Final optimized components
+"""
+
+import cv2
+import numpy as np
+from typing import Dict, List, Tuple, Optional, Union
+from pathlib import Path
+import json
+from datetime import datetime
+import hashlib
+from dataclasses import asdict
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
+import seaborn as sns
+
+class AdvancedImageAnalyzer:
+    """Advanced analysis for MTG card-specific features"""
+    
+    @staticmethod
+    def detect_card_regions(img: np.ndarray) -> Dict[str, np.ndarray]:
+        """
+        Detect different regions of MTG cards (text boxes, art, borders)
+        Returns masks for different card regions
+        """
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        h, w = gray.shape
+        
+        # Detect text regions (typically darker areas with high contrast)
+        text_mask = np.zeros_like(gray)
+        
+        # Find areas with high local contrast (likely text)
+        kernel = np.array([[-1,-1,-1], [-1,8,-1], [-1,-1,-1]])
+        edges = cv2.filter2D(gray, -1, kernel)
+        
+        # Text areas: dark pixels with high edge response
+        text_candidates = (gray < 100) & (edges > 30)
+        text_mask[text_candidates] = 255
+        
+        # Detect borders (typically thin black lines at edges)
+        border_mask = np.zeros_like(gray)
+        border_thickness = min(w, h) // 100  # Adaptive border detection
+        
+        # Edge regions
+        border_mask[:border_thickness, :] = 255  # Top
+        border_mask[-border_thickness:, :] = 255  # Bottom  
+        border_mask[:, :border_thickness] = 255  # Left
+        border_mask[:, -border_thickness:] = 255  # Right
+        
+        # Art region (everything else, typically center area)
+        art_mask = 255 - cv2.bitwise_or(text_mask, border_mask)
+        
+        return {
+            'text': text_mask,
+            'border': border_mask, 
+            'art': art_mask
+        }
+    
+    @staticmethod
+    def analyze_card_quality(img: np.ndarray) -> Dict:
+        """
+        Analyze MTG card-specific quality metrics
+        """
+        regions = AdvancedImageAnalyzer.detect_card_regions(img)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # Text readability analysis
+        text_areas = gray[regions['text'] > 0]
+        text_readability = 0
+        if len(text_areas) > 0:
+            text_contrast = np.std(text_areas)
+            text_brightness = np.mean(text_areas)
+            text_readability = min(100, text_contrast * 2)  # Simplified metric
+        
+        # Art quality analysis  
+        art_areas = img[regions['art'] > 0]
+        art_quality = 0
+        if len(art_areas) > 0:
+            art_saturation = np.mean(cv2.cvtColor(img, cv2.COLOR_BGR2HSV)[regions['art'] > 0, 1])
+            art_detail = np.std(art_areas)
+            art_quality = min(100, (art_saturation + art_detail) / 3)
+        
+        # Overall sharpness
+        laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+        sharpness_score = min(100, laplacian_var / 100)
+        
+        return {
+            'text_readability': text_readability,
+            'art_quality': art_quality, 
+            'sharpness': sharpness_score,
+            'regions': regions
+        }
+
+class QualityAssessment:
+    """Quality assessment and comparison tools"""
+    
+    @staticmethod
+    def compare_images(original: np.ndarray, enhanced: np.ndarray) -> Dict:
+        """
+        Comprehensive quality comparison between original and enhanced
+        """
+        # PSNR (Peak Signal-to-Noise Ratio)
+        mse = np.mean((original - enhanced) ** 2)
+        if mse == 0:
+            psnr = float('inf')
+        else:
+            psnr = 20 * np.log10(255.0 / np.sqrt(mse))
+        
+        # SSIM would require skimage, so we'll use simpler metrics
+        
+        # Contrast improvement
+        orig_contrast = np.std(cv2.cvtColor(original, cv2.COLOR_BGR2GRAY))
+        enh_contrast = np.std(cv2.cvtColor(enhanced, cv2.COLOR_BGR2GRAY))
+        contrast_improvement = (enh_contrast - orig_contrast) / orig_contrast * 100
+        
+        # Color saturation change
+        orig_sat = np.mean(cv2.cvtColor(original, cv2.COLOR_BGR2HSV)[..., 1])
+        enh_sat = np.mean(cv2.cvtColor(enhanced, cv2.COLOR_BGR2HSV)[..., 1])
+        saturation_change = (enh_sat - orig_sat) / orig_sat * 100 if orig_sat > 0 else 0
+        
+        # Brightness change
+        orig_brightness = np.mean(original)
+        enh_brightness = np.mean(enhanced)
+        brightness_change = enh_brightness - orig_brightness
+        
+        return {
+            'psnr': psnr,
+            'contrast_improvement_percent': contrast_improvement,
+            'saturation_change_percent': saturation_change,
+            'brightness_change': brightness_change,
+            'enhancement_strength': abs(contrast_improvement) + abs(saturation_change/10)
+        }
+    
+    @staticmethod
+    def create_quality_report(enhancer: MTGProxyEnhancer, 
+                            sample_size: int = 5) -> Dict:
+        """
+        Create comprehensive quality report for sample images
+        """
+        if not enhancer.images:
+            return {"error": "No images found"}
+        
+        sample_images = enhancer.images[:min(sample_size, len(enhancer.images))]
+        report = {
+            'timestamp': datetime.now().isoformat(),
+            'total_images': len(enhancer.images),
+            'analyzed_images': len(sample_images),
+            'results': []
+        }
+        
+        for filename in sample_images:
+            img_path = enhancer.input_folder / filename
+            img = cv2.imread(str(img_path))
+            
+            if img is None:
+                continue
+            
+            # Analyze original
+            stats, optimal_settings = ImageAnalyzer.analyze_image(img)
+            card_quality = AdvancedImageAnalyzer.analyze_card_quality(img)
+            
+            # Create enhanced version
+            enhanced = enhancer.enhance_image(img, optimal_settings)
+            quality_comparison = QualityAssessment.compare_images(img, enhanced)
+            
+            result = {
+                'filename': filename,
+                'original_stats': asdict(stats),
+                'recommended_settings': asdict(optimal_settings),
+                'card_quality': card_quality,
+                'quality_improvement': quality_comparison
+            }
+            
+            report['results'].append(result)
+        
+        return report
+
+class ImageCache:
+    """Intelligent caching system for faster previews"""
+    
+    def __init__(self, max_cache_size: int = 50):
+        self.cache = {}
+        self.max_size = max_cache_size
+        self.access_order = []
+    
+    def _generate_key(self, filename: str, settings: EnhancementSettings) -> str:
+        """Generate unique cache key"""
+        settings_str = json.dumps(asdict(settings), sort_keys=True)
+        return hashlib.md5(f"{filename}:{settings_str}".encode()).hexdigest()
+    
+    def get(self, filename: str, settings: EnhancementSettings) -> Optional[np.ndarray]:
+        """Get cached enhanced image"""
+        key = self._generate_key(filename, settings)
+        
+        if key in self.cache:
+            # Update access order
+            self.access_order.remove(key)
+            self.access_order.append(key)
+            return self.cache[key].copy()
+        
+        return None
+    
+    def put(self, filename: str, settings: EnhancementSettings, 
+            enhanced_img: np.ndarray) -> None:
+        """Cache enhanced image with LRU eviction"""
+        key = self._generate_key(filename, settings)
+        
+        # Evict oldest if cache full
+        if len(self.cache) >= self.max_size:
+            oldest_key = self.access_order.pop(0)
+            del self.cache[oldest_key]
+        
+        self.cache[key] = enhanced_img.copy()
+        self.access_order.append(key)
+    
+    def clear(self):
+        """Clear cache"""
+        self.cache.clear()
+        self.access_order.clear()
+
+class EnhancementValidator:
+    """Validate enhancement results and detect issues"""
+    
+    @staticmethod
+    def validate_enhancement(original: np.ndarray, enhanced: np.ndarray) -> Dict:
+        """
+        Validate that enhancement didn't introduce artifacts or issues
+        """
+        issues = []
+        
+        # Check for clipping
+        if np.sum(enhanced == 255) > np.sum(original == 255) * 2:
+            issues.append("Potential highlight clipping")
+        
+        if np.sum(enhanced == 0) > np.sum(original == 0) * 2:
+            issues.append("Potential shadow crushing")
+        
+        # Check for oversaturation
+        orig_sat = cv2.cvtColor(original, cv2.COLOR_BGR2HSV)[..., 1]
+        enh_sat = cv2.cvtColor(enhanced, cv2.COLOR_BGR2HSV)[..., 1]
+        
+        if np.mean(enh_sat) > np.mean(orig_sat) * 1.5:
+            issues.append("Potential oversaturation")
+        
+        # Check for excessive noise
+        orig_noise = cv2.Laplacian(cv2.cvtColor(original, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()
+        enh_noise = cv2.Laplacian(cv2.cvtColor(enhanced, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var()
+        
+        if enh_noise > orig_noise * 2:
+            issues.append("Potential noise amplification")
+        
+        return {
+            'valid': len(issues) == 0,
+            'issues': issues,
+            'quality_score': max(0, 100 - len(issues) * 25)
+        }
+
+class ExportManager:
+    """Handle different export formats and options"""
+    
+    @staticmethod
+    def export_with_metadata(img: np.ndarray, output_path: Path, 
+                           settings: EnhancementSettings, 
+                           format_type: str = "auto") -> bool:
+        """
+        Export image with enhancement metadata
+        """
+        # Determine format
+        if format_type == "auto":
+            format_type = output_path.suffix.lower()
+        
+        # Prepare export settings
+        export_params = []
+        
+        if format_type in ['.jpg', '.jpeg']:
+            export_params = [cv2.IMWRITE_JPEG_QUALITY, 95]
+        elif format_type == '.png':
+            export_params = [cv2.IMWRITE_PNG_COMPRESSION, 1]
+        elif format_type in ['.tiff', '.tif']:
+            export_params = [cv2.IMWRITE_TIFF_COMPRESSION, 1]
+        
+        # Save image
+        success = cv2.imwrite(str(output_path), img, export_params)
+        
+        # Save metadata
+        if success:
+            metadata_path = output_path.with_suffix('.json')
+            metadata = {
+                'original_file': output_path.name,
+                'enhancement_settings': asdict(settings),
+                'processed_date': datetime.now().isoformat(),
+                'version': '2.0_optimized'
+            }
+            
+            try:
+                with open(metadata_path, 'w') as f:
+                    json.dump(metadata, f, indent=2)
+            except Exception as e:
+                logger.warning(f"Could not save metadata: {e}")
+        
+        return success
+    
+    @staticmethod
+    def create_before_after_comparison(original: np.ndarray, enhanced: np.ndarray,
+                                     output_path: Path) -> bool:
+        """
+        Create side-by-side before/after comparison image
+        """
+        # Ensure same size
+        h, w = original.shape[:2]
+        
+        # Create comparison canvas
+        comparison = np.zeros((h, w * 2, 3), dtype=np.uint8)
+        comparison[:, :w] = original
+        comparison[:, w:] = enhanced
+        
+        # Add dividing line
+        cv2.line(comparison, (w, 0), (w, h), (255, 255, 255), 2)
+        
+        # Add labels
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        cv2.putText(comparison, "ORIGINAL", (10, 30), font, 1, (255, 255, 255), 2)
+        cv2.putText(comparison, "ENHANCED", (w + 10, 30), font, 1, (255, 255, 255), 2)
+        
+        return cv2.imwrite(str(output_path), comparison, [cv2.IMWRITE_JPEG_QUALITY, 95])
+
+class BatchAnalytics:
+    """Analytics and reporting for batch operations"""
+    
+    @staticmethod
+    def analyze_batch_results(enhancer: MTGProxyEnhancer, 
+                            results_summary: Dict) -> Dict:
+        """
+        Analyze batch processing results and provide insights
+        """
+        analytics = {
+            'processing_summary': results_summary,
+            'performance_metrics': {},
+            'recommendations': []
+        }
+        
+        # Performance metrics
+        total_images = results_summary.get('success', 0) + results_summary.get('errors', 0)
+        if total_images > 0 and results_summary.get('time', 0) > 0:
+            analytics['performance_metrics'] = {
+                'images_per_second': total_images / results_summary['time'],
+                'avg_time_per_image': results_summary['time'] / total_images,
+                'success_rate': results_summary.get('success', 0) / total_images * 100
+            }
+        
+        # Generate recommendations
+        if results_summary.get('errors', 0) > 0:
+            analytics['recommendations'].append("Some images failed processing - check file formats and corruption")
+        
+        if analytics['performance_metrics'].get('images_per_second', 0) < 1:
+            analytics['recommendations'].append("Consider reducing image sizes or enhancement complexity for faster processing")
+        
+        if results_summary.get('success', 0) > 10:
+            analytics['recommendations'].append("Large batch completed successfully - consider saving current settings as preset")
+        
+        return analytics
+    
+    @staticmethod
+    def create_processing_report(enhancer: MTGProxyEnhancer, 
+                               analytics: Dict,
+                               output_file: str = "processing_report.html") -> str:
+        """
+        Create HTML report of batch processing results
+        """
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>MTG Proxy Enhancement Report</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }}
+                .container {{ max-width: 1000px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; }}
+                .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 10px; margin-bottom: 20px; }}
+                .metric {{ background: #f8f9fa; padding: 15px; margin: 10px 0; border-left: 4px solid #007bff; }}
+                .success {{ border-left-color: #28a745; }}
+                .warning {{ border-left-color: #ffc107; }}
+                .error {{ border-left-color: #dc3545; }}
+                .footer {{ text-align: center; color: #666; margin-top: 30px; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>🃏 MTG Proxy Enhancement Report</h1>
+                    <p>Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+                </div>
+                
+                <div class="metric success">
+                    <h3>✅ Processing Summary</h3>
+                    <p><strong>Successfully processed:</strong> {analytics['processing_summary'].get('success', 0)} images</p>
+                    <p><strong>Total time:</strong> {analytics['processing_summary'].get('time', 0):.1f} seconds</p>
+                    <p><strong>Input folder:</strong> {enhancer.input_folder}</p>
+                    <p><strong>Output folder:</strong> {enhancer.output_folder}</p>
+                </div>
+                
+                <div class="metric">
+                    <h3>📊 Performance Metrics</h3>
+                    <p><strong>Processing speed:</strong> {analytics['performance_metrics'].get('images_per_second', 0):.1f} images/second</p>
+                    <p><strong>Average time per image:</strong> {analytics['performance_metrics'].get('avg_time_per_image', 0):.2f} seconds</p>
+                    <p><strong>Success rate:</strong> {analytics['performance_metrics'].get('success_rate', 0):.1f}%</p>
+                </div>
+                
+                <div class="metric warning">
+                    <h3>💡 Recommendations</h3>
+                    <ul>
+        """
+        
+        for rec in analytics.get('recommendations', []):
+            html_content += f"<li>{rec}</li>"
+        
+        html_content += """
+                    </ul>
+                </div>
+                
+                <div class="footer">
+                    <p>Generated by MTG Proxy Enhancer v2.0 (Optimized)</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        try:
+            with open(output_file, 'w') as f:
+                f.write(html_content)
+            return output_file
+        except Exception as e:
+            logger.error(f"Failed to create report: {e}")
+            return ""
+
+class MTGEnhancerPro:
+    """
+    Professional-grade MTG enhancer with all advanced features
+    """
+    
+    def __init__(self, input_folder: str = "mtgproxy/Input", 
+                 output_folder: str = "mtgproxy/Output"):
+        self.enhancer = MTGProxyEnhancer(input_folder, output_folder)
+        self.batch_processor = BatchProcessor(self.enhancer)
+        self.cache = ImageCache()
+        self.settings_manager = SettingsManager()
+        
+    def enhance_with_validation(self, img: np.ndarray, 
+                              settings: EnhancementSettings) -> Tuple[np.ndarray, Dict]:
+        """
+        Enhance image with quality validation
+        """
+        # Check cache first
+        cache_result = self.cache.get("temp_image", settings)
+        if cache_result is not None:
+            return cache_result, {"cached": True}
+        
+        # Enhance image
+        enhanced = self.enhancer.enhance_image(img, settings)
+        
+        # Validate result
+        validation = EnhancementValidator.validate_enhancement(img, enhanced)
+        
+        # Cache result if valid
+        if validation['valid']:
+            self.cache.put("temp_image", settings, enhanced)
+        
+        return enhanced, validation
+    
+    def batch_process_with_analytics(self, settings: EnhancementSettings,
+                                   create_report: bool = True,
+                                   create_comparisons: bool = False) -> Dict:
+        """
+        Batch process with comprehensive analytics
+        """
+        # Process images
+        results = self.batch_processor.batch_process_threaded(settings)
+        
+        # Generate analytics
+        analytics = BatchAnalytics.analyze_batch_results(self.enhancer, results)
+        
+        # Create comparison images if requested
+        if create_comparisons and results['success'] > 0:
+            self._create_batch_comparisons(settings)
+        
+        # Create HTML report if requested
+        if create_report:
+            report_file = BatchAnalytics.create_processing_report(self.enhancer, analytics)
+            if report_file:
+                print(f"📄 Report saved: {report_file}")
+        
+        return analytics
+    
+    def _create_batch_comparisons(self, settings: EnhancementSettings):
+        """Create before/after comparisons for batch"""
+        comparison_folder = self.enhancer.output_folder / "comparisons"
+        comparison_folder.mkdir(exist_ok=True)
+        
+        sample_size = min(5, len(self.enhancer.images))
+        
+        for i, filename in enumerate(self.enhancer.images[:sample_size]):
+            original_path = self.enhancer.input_folder / filename
+            enhanced_path = self.enhancer.output_folder / filename
+            
+            original = cv2.imread(str(original_path))
+            enhanced = cv2.imread(str(enhanced_path))
+            
+            if original is not None and enhanced is not None:
+                comparison_path = comparison_folder / f"comparison_{filename}"
+                ExportManager.create_before_after_comparison(original, enhanced, comparison_path)
+        
+        print(f"📷 {sample_size} comparison images saved to: {comparison_folder}")
+
+# Advanced utility functions
+def create_enhancement_preview(image_path: str, settings: EnhancementSettings) -> None:
+    """
+    Create a detailed preview for a single image
+    """
+    img = cv2.imread(image_path)
+    if img is None:
+        print(f"❌ Could not load image: {image_path}")
+        return
+    
+    enhancer = MTGProxyEnhancer()
+    enhanced = enhancer.enhance_image(img, settings)
+    
+    # Analyze quality
+    quality_comparison = QualityAssessment.compare_images(img, enhanced)
+    card_quality = AdvancedImageAnalyzer.analyze_card_quality(img)
+    validation = EnhancementValidator.validate_enhancement(img, enhanced)
+    
+    # Create comprehensive preview
+    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    fig.suptitle(f"🃏 Enhancement Preview: {Path(image_path).name}", fontsize=16)
+    
+    # Original and enhanced
+    axes[0,0].imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    axes[0,0].set_title("Original")
+    axes[0,0].axis('off')
+    
+    axes[0,1].imshow(cv2.cvtColor(enhanced, cv2.COLOR_BGR2RGB))
+    axes[0,1].set_title("Enhanced")
+    axes[0,1].axis('off')
+    
+    # Difference map
+    diff = cv2.absdiff(img, enhanced)
+    axes[0,2].imshow(cv2.cvtColor(diff, cv2.COLOR_BGR2RGB))
+    axes[0,2].set_title("Difference Map")
+    axes[0,2].axis('off')
+    
+    # Quality metrics
+    axes[1,0].axis('off')
+    metrics_text = f"""Quality Metrics:
+PSNR: {quality_comparison['psnr']:.1f} dB
+Contrast Improvement: {quality_comparison['contrast_improvement_percent']:+.1f}%
+Saturation Change: {quality_comparison['saturation_change_percent']:+.1f}%
+Brightness Change: {quality_comparison['brightness_change']:+.1f}
+
+Card Quality:
+Text Readability: {card_quality['text_readability']:.1f}/100
+Art Quality: {card_quality['art_quality']:.1f}/100
+Sharpness: {card_quality['sharpness']:.1f}/100"""
+    
+    axes[1,0].text(0.1, 0.9, metrics_text, transform=axes[1,0].transAxes,
+                   fontsize=10, verticalalignment='top', fontfamily='monospace')
+    
+    # Settings display
+    axes[1,1].axis('off')
+    settings_text = f"""Enhancement Settings:
+CLAHE: {settings.clip_limit:.1f}
+Gamma: {settings.gamma:.2f}
+Saturation: {settings.saturation:.2f}
+Brightness: {settings.brightness:+.0f}
+Contrast: {settings.contrast:.2f}
+Vibrance: {settings.vibrance:+.0f}
+Warmth: {settings.warmth:+.0f}
+Exposure: {settings.exposure:+.1f}
+Clarity: {settings.clarity:+.0f}"""
+    
+    axes[1,1].text(0.1, 0.9, settings_text, transform=axes[1,1].transAxes,
+                   fontsize=10, verticalalignment='top', fontfamily='monospace')
+    
+    # Validation results
+    axes[1,2].axis('off')
+    validation_text = f"""Validation Results:
+Status: {'✅ PASSED' if validation['valid'] else '⚠️ ISSUES DETECTED'}
+Quality Score: {validation['quality_score']}/100
+
+Issues:"""
+    
+    if validation['issues']:
+        for issue in validation['issues']:
+            validation_text += f"\n• {issue}"
+    else:
+        validation_text += "\n• None detected"
+    
+    axes[1,2].text(0.1, 0.9, validation_text, transform=axes[1,2].transAxes,
+                   fontsize=10, verticalalignment='top', fontfamily='monospace')
+    
+    plt.tight_layout()
+    plt.show()
+
+def run_comprehensive_analysis(input_folder: str = "mtgproxy/Input") -> Dict:
+    """
+    Run comprehensive analysis of all images in folder
+    """
+    enhancer = MTGProxyEnhancer(input_folder)
+    
+    if not enhancer.images:
+        return {"error": "No images found"}
+    
+    print("🔍 Running comprehensive image analysis...")
+    
+    analysis_results = {
+        'folder': input_folder,
+        'total_images': len(enhancer.images),
+        'analysis_date': datetime.now().isoformat(),
+        'image_analyses': [],
+        'summary_stats': {}
+    }
+    
+    brightness_values = []
+    contrast_values = []
+    quality_scores = []
+    
+    for i, filename in enumerate(enhancer.images):
+        print(f"\rAnalyzing: {filename} [{i+1}/{len(enhancer.images)}]", end="", flush=True)
+        
+        img_path = enhancer.input_folder / filename
+        img = cv2.imread(str(img_path))
+        
+        if img is None:
+            continue
+        
+        # Comprehensive analysis
+        stats, optimal_settings = ImageAnalyzer.analyze_image(img)
+        card_quality = AdvancedImageAnalyzer.analyze_card_quality(img)
+        
+        # Enhanced version for comparison
+        enhanced = enhancer.enhance_image(img, optimal_settings)
+        quality_comparison = QualityAssessment.compare_images(img, enhanced)
+        validation = EnhancementValidator.validate_enhancement(img, enhanced)
+        
+        image_analysis = {
+            'filename': filename,
+            'file_size': img_path.stat().st_size,
+            'dimensions': f"{img.shape[1]}x{img.shape[0]}",
+            'original_stats': asdict(stats),
+            'card_quality': card_quality,
+            'optimal_settings': asdict(optimal_settings),
+            'enhancement_impact': quality_comparison,
+            'validation': validation
+        }
+        
+        analysis_results['image_analyses'].append(image_analysis)
+        
+        # Collect for summary stats
+        brightness_values.append(stats.mean_brightness)
+        contrast_values.append(stats.contrast_std)
+        quality_scores.append(validation['quality_score'])
+    
+    # Summary statistics
+    if brightness_values:
+        analysis_results['summary_stats'] = {
+            'avg_brightness': float(np.mean(brightness_values)),
+            'avg_contrast': float(np.mean(contrast_values)),
+            'avg_quality_score': float(np.mean(quality_scores)),
+            'dark_images_count': sum(1 for b in brightness_values if b < 80),
+            'bright_images_count': sum(1 for b in brightness_values if b > 180),
+            'low_contrast_count': sum(1 for c in contrast_values if c < 35)
+        }
+    
+    print(f"\n\n✅ Analysis complete!")
+    print(f"📊 Average brightness: {analysis_results['summary_stats'].get('avg_brightness', 0):.1f}")
+    print(f"📊 Average contrast: {analysis_results['summary_stats'].get('avg_contrast', 0):.1f}")
+    print(f"📊 Average quality: {analysis_results['summary_stats'].get('avg_quality_score', 0):.1f}/100")
+    
+    # Save analysis to JSON
+    analysis_file = Path(input_folder).parent / "image_analysis.json"
+    try:
+        with open(analysis_file, 'w') as f:
+            json.dump(analysis_results, f, indent=2)
+        print(f"💾 Analysis saved to: {analysis_file}")
+    except Exception as e:
+        logger.error(f"Could not save analysis: {e}")
+    
+    return analysis_results
+
+# Final optimized entry points
+def create_pro_enhancer(input_folder: str = "mtgproxy/Input",
+                       output_folder: str = "mtgproxy/Output") -> MTGEnhancerPro:
+    """Create professional MTG enhancer with all features"""
+    return MTGEnhancerPro(input_folder, output_folder)
+
+def one_click_enhance(input_folder: str = "mtgproxy/Input",
+                     output_folder: str = "mtgproxy/Output",
+                     create_report: bool = True) -> Dict:
+    """
+    One-click enhancement with auto-analysis and reporting
+    """
+    print("🚀 One-Click MTG Proxy Enhancement")
+    print("=" * 40)
+    
+    pro_enhancer = create_pro_enhancer(input_folder, output_folder)
+    
+    # Run comprehensive enhancement
+    results = pro_enhancer.batch_process_with_analytics(
+        EnhancementSettings(), 
+        create_report=create_report,
+        create_comparisons=True
+    )
+    
+    print("\n🎉 One-click enhancement complete!")
+    return results
+
+if __name__ == "__main__":
+    print("🃏 MTG Proxy Enhancer - Advance
