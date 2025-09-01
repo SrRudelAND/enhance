@@ -937,25 +937,27 @@ Change   → Brightness: {enh_brightness-orig_brightness:+.1f}, Contrast: {enh_c
         
         # Tone controls
         tone_controls = [
-            FloatSlider(value=1.0, min=0.0, max=3.0, step=0.05, description="Exposure",
+            FloatSlider(value=0, min=-2.0, max=2.0, step=0.1, description="Exposure",
                        style={'description_width': '100px'}, layout={'width': '280px'}),
-            FloatSlider(value=0, min=-50, max=50, step=1, description="Vibrance",
+            FloatSlider(value=0, min=-50, max=50, step=1, description="Highlights",
                        style={'description_width': '100px'}, layout={'width': '280px'}),
-            FloatSlider(value=0, min=-30, max=30, step=1, description="Warmth",
+            FloatSlider(value=0, min=-50, max=50, step=1, description="Shadows",
                        style={'description_width': '100px'}, layout={'width': '280px'}),
-            FloatSlider(value=0, min=-30, max=30, step=1, description="Tint",
+            FloatSlider(value=0, min=-50, max=50, step=1, description="Clarity",
                        style={'description_width': '100px'}, layout={'width': '280px'})
         ]
         
         # Options
-        comparison_slider = FloatSlider(0.5, 0.0, 1.0, 0.01, 
+        comparison_slider = FloatSlider(value=0.5, min=0.0, max=1.0, step=0.01, 
                                        description="Original ↔ Enhanced",
                                        style={'description_width': '150px'}, 
                                        layout={'width': '400px'})
         
-        preserve_black = Checkbox(True, description="Preserve Black Pixels")
-        black_threshold = IntSlider(15, 5, 50, 1, description="Black Threshold",
+        preserve_black = Checkbox(value=True, description="Preserve Black Pixels")
+
+        black_threshold = IntSlider(value=15, min=5, max=50, step=1, description="Black Threshold",
                                    style={'description_width': '120px'})
+
         show_stats = Checkbox(False, description="Show Statistics")
         
         # Action buttons
