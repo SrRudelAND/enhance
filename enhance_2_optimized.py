@@ -2891,28 +2891,36 @@ def print_complete_help():
 
 # Final optimized entry point
 if __name__ == "__main__":
-    # Check if running as script or imported
-    if len(sys.argv) > 1:
-        # Command-line mode
-        main()
-    else:
-        # Interactive Python session
-        print("🃏 MTG Proxy Enhancer - Complete Optimized Version")
-        print("=" * 60)
-        print("\n📚 For complete usage guide, run: print_complete_help()")
-        print("\n🚀 INSTANT START:")
-        print("• one_click_enhance() - Auto-enhance everything")
-        print("• run_cli_interface() - Interactive command-line")
-        print("• auto_enhance_all() - Quick auto-processing")
-        
-        try:
-            # Auto-initialize if images present
-            enhancer = create_mtg_enhancer_optimized()
-            if enhancer.images:
-                print(f"\n✅ Ready! Found {enhancer.images} images")
-                print("🎯 Quick start: one_click_enhance()")
-            else:
-                print(f"\n📂 Add images to '{enhancer.input_folder}' to begin")
-        except Exception as e:
-            logger.error(f"Initialization error: {e}")
+    # Check if running in Jupyter (avoid argument parsing conflicts)
+    try:
+        from IPython import get_ipython
+        if get_ipython() is not None:
+            # Running in Jupyter - skip command line parsing
+            print("🃏 MTG Proxy Enhancer - Complete Optimized Version")
+            print("=" * 60)
+            print("\n📚 For complete usage guide, run: print_complete_help()")
+            print("\n🚀 INSTANT START:")
+            print("• one_click_enhance() - Auto-enhance everything")
+            print("• run_cli_interface() - Interactive command-line")
+            print("• auto_enhance_all() - Quick auto-processing")
+            
+            try:
+                # Auto-initialize if images present
+                enhancer = create_mtg_enhancer_optimized()
+                if enhancer.images:
+                    print(f"\n✅ Ready! Found {len(enhancer.images)} images")
+                    print("🎯 Quick start: one_click_enhance()")
+                else:
+                    print(f"\n📂 Add images to '{enhancer.input_folder}' to begin")
+            except Exception as e:
+                logger.error(f"Initialization error: {e}")
+        else:
+            # Running as script - use command line parsing
+            main()
+    except ImportError:
+        # Not in IPython/Jupyter environment
+        if len(sys.argv) > 1:
+            main()
+        else:
+            print("🃏 MTG Proxy Enhancer loaded!")
 
