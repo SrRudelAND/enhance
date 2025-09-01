@@ -1,5 +1,3 @@
-Part 1
-
 #!/usr/bin/env python3
 """
 Part 1
