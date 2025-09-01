@@ -731,4 +731,19 @@ if __name__ == "__main__":
         # Interactive Python session
         print("🃏 MTG Proxy Enhancer - Complete Optimized Version")
         print("=" * 60)
-        print("\n📚 For complete usage guide, run:
+        print("\n📚 For complete usage guide, run: print_complete_help()")
+        print("\n🚀 INSTANT START:")
+        print("• one_click_enhance() - Auto-enhance everything")
+        print("• run_cli_interface() - Interactive command-line")
+        print("• auto_enhance_all() - Quick auto-processing")
+        
+        try:
+            # Auto-initialize if images present
+            enhancer = create_mtg_enhancer_optimized()
+            if enhancer.images:
+                print(f"\n✅ Ready! Found {enhancer.images} images")
+                print("🎯 Quick start: one_click_enhance()")
+            else:
+                print(f"\n📂 Add images to '{enhancer.input_folder}' to begin")
+        except Exception as e:
+            logger.error(f"Initialization error: {e}")
