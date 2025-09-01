@@ -2926,3 +2926,416 @@ if __name__ == "__main__":
         else:
             print("🃏 MTG Proxy Enhancer loaded!")
 
+#!/usr/bin/env python3
+"""
+Part 6
+MTG Proxy Enhancer - GPU Acceleration Module
+Add this to your existing code for GPU/iGPU acceleration
+"""
+
+import cv2
+import numpy as np
+import logging
+
+logger = logging.getLogger(__name__)
+
+class GPUManager:
+    """Manage GPU acceleration capabilities"""
+    
+    def __init__(self):
+        self.cuda_available = False
+        self.opencl_available = False
+        self.gpu_device_count = 0
+        self._check_gpu_support()
+    
+    def _check_gpu_support(self):
+        """Check available GPU acceleration options"""
+        try:
+            # Check CUDA support (NVIDIA GPUs)
+            self.gpu_device_count = cv2.cuda.getCudaEnabledDeviceCount()
+            self.cuda_available = self.gpu_device_count > 0
+            
+            if self.cuda_available:
+                logger.info(f"✅ CUDA acceleration available ({self.gpu_device_count} devices)")
+            else:
+                logger.info("❌ CUDA acceleration not available")
+        
+        except AttributeError:
+            logger.info("❌ OpenCV not built with CUDA support")
+            self.cuda_available = False
+        
+        try:
+            # Check OpenCL support (Intel iGPU, AMD, etc.)
+            self.opencl_available = cv2.ocl.haveOpenCL()
+            
+            if self.opencl_available:
+                cv2.ocl.setUseOpenCL(True)
+                logger.info("✅ OpenCL (iGPU) acceleration enabled")
+            else:
+                logger.info("❌ OpenCL acceleration not available")
+        
+        except AttributeError:
+            logger.info("❌ OpenCL support not available in this OpenCV build")
+            self.opencl_available = False
+    
+    def get_acceleration_info(self) -> dict:
+        """Get detailed acceleration information"""
+        info = {
+            'cuda_available': self.cuda_available,
+            'cuda_devices': self.gpu_device_count,
+            'opencl_available': self.opencl_available,
+            'opencv_version': cv2.__version__,
+            'build_info': {}
+        }
+        
+        # Get build information
+        try:
+            build_info = cv2.getBuildInformation()
+            info['build_info'] = {
+                'cuda_support': 'CUDA:' in build_info and 'YES' in build_info.split('CUDA:')[1].split('\n')[0],
+                'opencl_support': 'OpenCL:' in build_info and 'YES' in build_info.split('OpenCL:')[1].split('\n')[0]
+            }
+        except:
+            pass
+        
+        return info
+    
+    def print_gpu_info(self):
+        """Print detailed GPU information"""
+        info = self.get_acceleration_info()
+        
+        print("🖥️  GPU Acceleration Status")
+        print("=" * 40)
+        print(f"OpenCV Version: {info['opencv_version']}")
+        print(f"CUDA Support: {'✅ YES' if info['cuda_available'] else '❌ NO'}")
+        if info['cuda_available']:
+            print(f"CUDA Devices: {info['cuda_devices']}")
+        print(f"OpenCL Support: {'✅ YES' if info['opencl_available'] else '❌ NO'}")
+        
+        if not info['cuda_available'] and not info['opencl_available']:
+            print("\n💡 To enable GPU acceleration:")
+            print("• Install opencv-contrib-python for better GPU support")
+            print("• Or use: pip install opencv-python-headless")
+
+class GPUImageProcessor:
+    """GPU-accelerated image processing"""
+    
+    def __init__(self):
+        self.gpu_manager = GPUManager()
+        self.use_gpu = self.gpu_manager.cuda_available or self.gpu_manager.opencl_available
+    
+    def enhance_image_gpu(self, img: np.ndarray, settings) -> np.ndarray:
+        """
+        GPU-accelerated image enhancement
+        Falls back to CPU if GPU is not available
+        """
+        if not self.use_gpu:
+            return self._enhance_cpu_fallback(img, settings)
+        
+        try:
+            if self.gpu_manager.cuda_available:
+                return self._enhance_cuda(img, settings)
+            elif self.gpu_manager.opencl_available:
+                return self._enhance_opencl(img, settings)
+            else:
+                return self._enhance_cpu_fallback(img, settings)
+        
+        except Exception as e:
+            logger.warning(f"GPU processing failed, falling back to CPU: {e}")
+            return self._enhance_cpu_fallback(img, settings)
+    
+    def _enhance_cuda(self, img: np.ndarray, settings) -> np.ndarray:
+        """CUDA-accelerated enhancement (NVIDIA GPUs)"""
+        try:
+            # Upload image to GPU memory
+            gpu_img = cv2.cuda_GpuMat()
+            gpu_img.upload(img)
+            
+            # Convert to float for processing
+            gpu_float = cv2.cuda.convertScaleAbs(gpu_img, alpha=1.0/255.0, beta=0.0)
+            
+            # GPU Gamma correction
+            if abs(settings.gamma - 1.0) > 0.001:
+                gpu_float = cv2.cuda.pow(gpu_float, 1.0/settings.gamma)
+            
+            # GPU Brightness/Contrast
+            if settings.brightness != 0 or settings.contrast != 1.0:
+                gpu_float = cv2.cuda.convertScaleAbs(gpu_float, 
+                                                   alpha=settings.contrast, 
+                                                   beta=settings.brightness/255.0)
+            
+            # Convert back to uint8
+            gpu_result = cv2.cuda.convertScaleAbs(gpu_float, alpha=255.0, beta=0.0)
+            
+            # Download result from GPU
+            result = gpu_result.download()
+            
+            return result
+        
+        except Exception as e:
+            logger.warning(f"CUDA processing error: {e}")
+            return self._enhance_cpu_fallback(img, settings)
+    
+    def _enhance_opencl(self, img: np.ndarray, settings) -> np.ndarray:
+        """OpenCL-accelerated enhancement (Intel iGPU, AMD)"""
+        try:
+            # OpenCL acceleration works transparently with UMat
+            umat_img = cv2.UMat(img)
+            
+            # Gamma correction (OpenCL accelerated)
+            if abs(settings.gamma - 1.0) > 0.001:
+                # Create lookup table for gamma correction
+                gamma_table = np.array([((i / 255.0) ** (1.0 / settings.gamma)) * 255 
+                                      for i in range(256)], dtype=np.uint8)
+                gamma_table_umat = cv2.UMat(gamma_table)
+                umat_img = cv2.LUT(umat_img, gamma_table_umat)
+            
+            # Brightness/Contrast (OpenCL accelerated)
+            if settings.brightness != 0 or settings.contrast != 1.0:
+                umat_img = cv2.convertScaleAbs(umat_img, 
+                                             alpha=settings.contrast, 
+                                             beta=settings.brightness)
+            
+            # CLAHE with OpenCL acceleration
+            if settings.clip_limit > 0:
+                lab_umat = cv2.cvtColor(umat_img, cv2.COLOR_BGR2LAB)
+                l, a, b = cv2.split(lab_umat)
+                
+                clahe = cv2.createCLAHE(clipLimit=settings.clip_limit, tileGridSize=(8, 8))
+                l = clahe.apply(l)
+                
+                lab_umat = cv2.merge([l, a, b])
+                umat_img = cv2.cvtColor(lab_umat, cv2.COLOR_LAB2BGR)
+            
+            # Convert back to regular numpy array
+            result = umat_img.get()
+            
+            return result
+        
+        except Exception as e:
+            logger.warning(f"OpenCL processing error: {e}")
+            return self._enhance_cpu_fallback(img, settings)
+    
+    def _enhance_cpu_fallback(self, img: np.ndarray, settings):
+        """CPU fallback - use your existing enhance_image method"""
+        # This calls your existing CPU-based enhancement
+        from enhance_2_optimized import ImageProcessor
+        
+        # Apply existing CPU processing pipeline
+        enhanced = img.copy()
+        
+        # Gamma correction
+        if abs(settings.gamma - 1.0) > 0.001:
+            enhanced = ImageProcessor.apply_gamma_correction(enhanced, settings.gamma)
+        
+        # Brightness/Contrast
+        if settings.brightness != 0 or settings.contrast != 1.0:
+            enhanced = cv2.convertScaleAbs(enhanced, alpha=settings.contrast, beta=settings.brightness)
+        
+        # CLAHE
+        if settings.clip_limit > 0:
+            enhanced = ImageProcessor.apply_clahe(enhanced, settings.clip_limit)
+        
+        return enhanced
+    
+    def benchmark_gpu_vs_cpu(self, test_image: np.ndarray, settings, iterations: int = 10):
+        """Benchmark GPU vs CPU performance"""
+        import time
+        
+        print(f"🏃 Running benchmark with {iterations} iterations...")
+        print(f"Image size: {test_image.shape[1]}x{test_image.shape[0]}")
+        
+        # CPU benchmark
+        cpu_times = []
+        for i in range(iterations):
+            start = time.time()
+            _ = self._enhance_cpu_fallback(test_image, settings)
+            cpu_times.append(time.time() - start)
+        
+        cpu_avg = np.mean(cpu_times)
+        cpu_std = np.std(cpu_times)
+        
+        # GPU benchmark
+        gpu_times = []
+        for i in range(iterations):
+            start = time.time()
+            _ = self.enhance_image_gpu(test_image, settings)
+            gpu_times.append(time.time() - start)
+        
+        gpu_avg = np.mean(gpu_times)
+        gpu_std = np.std(gpu_times)
+        
+        # Results
+        speedup = cpu_avg / gpu_avg if gpu_avg > 0 else 0
+        
+        print(f"\n📊 Benchmark Results:")
+        print(f"CPU Average: {cpu_avg*1000:.1f}ms (±{cpu_std*1000:.1f}ms)")
+        print(f"GPU Average: {gpu_avg*1000:.1f}ms (±{gpu_std*1000:.1f}ms)")
+        print(f"Speedup: {speedup:.2f}x {'🚀' if speedup > 1.1 else '🐌' if speedup < 0.9 else '🤷'}")
+        
+        return {
+            'cpu_avg': cpu_avg,
+            'gpu_avg': gpu_avg,
+            'speedup': speedup,
+            'cpu_times': cpu_times,
+            'gpu_times': gpu_times
+        }
+
+# Enhanced MTGProxyEnhancer class with GPU support
+class MTGProxyEnhancerGPU:
+    """GPU-enhanced MTG Proxy Enhancer"""
+    
+    def __init__(self, input_folder: str = "mtgproxy/Input", 
+                 output_folder: str = "mtgproxy/Output"):
+        # Initialize base enhancer
+        from enhance_2_optimized import MTGProxyEnhancer
+        self.base_enhancer = MTGProxyEnhancer(input_folder, output_folder)
+        
+        # Initialize GPU processor
+        self.gpu_processor = GPUImageProcessor()
+        
+        # Print GPU status
+        self.gpu_processor.gpu_manager.print_gpu_info()
+    
+    def enhance_image(self, img: np.ndarray, settings) -> np.ndarray:
+        """Enhanced image processing with GPU acceleration"""
+        original = img.copy()
+        
+        # Use GPU for basic operations
+        enhanced = self.gpu_processor.enhance_image_gpu(img, settings)
+        
+        # Apply remaining CPU-only operations
+        enhanced = self._apply_advanced_cpu_operations(enhanced, settings)
+        
+        # Preserve black pixels (CPU operation)
+        if settings.preserve_black:
+            from enhance_2_optimized import ImageProcessor
+            enhanced = ImageProcessor.preserve_black_pixels(original, enhanced, settings.black_threshold)
+        
+        return enhanced
+    
+    def _apply_advanced_cpu_operations(self, img: np.ndarray, settings) -> np.ndarray:
+        """Apply operations that don't have good GPU implementations yet"""
+        from enhance_2_optimized import ImageProcessor
+        
+        # Advanced tone mapping (CPU for now)
+        if any(x != 0 for x in [settings.highlights, settings.shadows, settings.whites, settings.blacks]):
+            img = ImageProcessor.apply_tone_mapping(img, settings.highlights, settings.shadows, 
+                                                  settings.whites, settings.blacks)
+        
+        # Color adjustments (CPU for now)  
+        if any(x != 0 and x != 1.0 for x in [settings.saturation, settings.vibrance, settings.warmth, settings.tint]):
+            img = ImageProcessor.apply_color_adjustments(img, settings.saturation, settings.vibrance,
+                                                       settings.warmth, settings.tint)
+        
+        # Clarity/Structure (CPU)
+        if settings.clarity != 0:
+            gaussian = cv2.GaussianBlur(img, (0, 0), 2.0)
+            img = cv2.addWeighted(img, 1.0 + settings.clarity/100.0, gaussian, -settings.clarity/100.0, 0)
+            img = np.clip(img, 0, 255).astype(np.uint8)
+        
+        return img
+    
+    def batch_process_gpu(self, settings, max_workers: int = 4, use_gpu: bool = True):
+        """GPU-accelerated batch processing"""
+        from enhance_2_optimized import BatchProcessor
+        
+        # Temporarily override the enhancement method
+        if use_gpu:
+            original_enhance = self.base_enhancer.enhance_image
+            self.base_enhancer.enhance_image = self.enhance_image
+        
+        try:
+            batch_processor = BatchProcessor(self.base_enhancer)
+            results = batch_processor.batch_process_threaded(settings, max_workers)
+            return results
+        finally:
+            # Restore original method
+            if use_gpu:
+                self.base_enhancer.enhance_image = original_enhance
+    
+    def benchmark_performance(self):
+        """Run comprehensive performance benchmark"""
+        if not self.base_enhancer.images:
+            print("❌ No images found for benchmarking")
+            return
+        
+        # Load test image
+        test_image_path = self.base_enhancer.input_folder / self.base_enhancer.images[0]
+        test_img = cv2.imread(str(test_image_path))
+        
+        if test_img is None:
+            print("❌ Could not load test image")
+            return
+        
+        # Test settings
+        from enhance_2_optimized import EnhancementSettings
+        settings = EnhancementSettings(
+            gamma=1.3, 
+            brightness=10, 
+            contrast=1.2, 
+            clip_limit=2.5
+        )
+        
+        # Run benchmark
+        results = self.gpu_processor.benchmark_gpu_vs_cpu(test_img, settings)
+        
+        return results
+
+# Integration functions
+def create_gpu_enhancer(input_folder: str = "mtgproxy/Input", 
+                       output_folder: str = "mtgproxy/Output") -> MTGProxyEnhancerGPU:
+    """Create GPU-enhanced MTG Proxy Enhancer"""
+    return MTGProxyEnhancerGPU(input_folder, output_folder)
+
+def auto_enhance_all_gpu(input_folder: str = "mtgproxy/Input", 
+                        output_folder: str = "mtgproxy/Output",
+                        max_workers: int = 4) -> dict:
+    """Auto-enhance all images using GPU acceleration"""
+    gpu_enhancer = create_gpu_enhancer(input_folder, output_folder)
+    
+    # Use auto-enhancement with GPU
+    from enhance_2_optimized import EnhancementSettings
+    settings = EnhancementSettings()  # Default settings
+    
+    results = gpu_enhancer.batch_process_gpu(settings, max_workers, use_gpu=True)
+    
+    return results
+
+def benchmark_gpu_acceleration(input_folder: str = "mtgproxy/Input"):
+    """Benchmark GPU vs CPU performance"""
+    gpu_enhancer = create_gpu_enhancer(input_folder)
+    return gpu_enhancer.benchmark_performance()
+
+# Usage examples
+def demo_gpu_acceleration():
+    """Demonstrate GPU acceleration features"""
+    print("🃏 MTG Proxy Enhancer - GPU Acceleration Demo")
+    print("=" * 50)
+    
+    # Check GPU support
+    gpu_manager = GPUManager()
+    gpu_manager.print_gpu_info()
+    
+    # Create GPU enhancer
+    gpu_enhancer = create_gpu_enhancer()
+    
+    if gpu_enhancer.base_enhancer.images:
+        print(f"\n✅ Found {len(gpu_enhancer.base_enhancer.images)} images")
+        
+        # Run benchmark
+        print("\n🏃 Running performance benchmark...")
+        benchmark_results = gpu_enhancer.benchmark_performance()
+        
+        if benchmark_results and benchmark_results['speedup'] > 1.1:
+            print(f"\n🚀 GPU acceleration provides {benchmark_results['speedup']:.2f}x speedup!")
+            print("💡 Use auto_enhance_all_gpu() for faster batch processing")
+        elif benchmark_results:
+            print(f"\n🤷 GPU speedup: {benchmark_results['speedup']:.2f}x (minimal improvement)")
+            print("💡 CPU processing might be sufficient for your hardware")
+        
+    else:
+        print("❌ No images found for testing")
+
+if __name__ == "__main__":
+    demo_gpu_acceleration()
