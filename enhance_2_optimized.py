@@ -301,18 +301,13 @@ class MTGProxyEnhancer:
         self.input_folder.mkdir(parents=True, exist_ok=True)
         self.output_folder.mkdir(parents=True, exist_ok=True)
         
-    from itertools import chain
-    
     def _load_image_list(self) -> List[str]:
         """Load list of supported image files"""
         images = []
         for ext in self.SUPPORTED_FORMATS:
-            # Use itertools.chain to combine generators
-            files = chain(
-                self.input_folder.glob(f"*{ext}"),
-                self.input_folder.glob(f"*{ext.upper()}")
-            )
-            images.extend([f.name for f in files])
+            # Handle each glob separately (no generator addition)
+            images.extend([f.name for f in self.input_folder.glob(f"*{ext}")])
+            images.extend([f.name for f in self.input_folder.glob(f"*{ext.upper()}")])
         
         logger.info(f"Found {len(images)} images in {self.input_folder}")
         return sorted(list(set(images)))  # Remove duplicates and sort
