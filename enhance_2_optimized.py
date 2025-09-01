@@ -925,25 +925,25 @@ Change   → Brightness: {enh_brightness-orig_brightness:+.1f}, Contrast: {enh_c
                 
         # Color controls
         color_controls = [
-            FloatSlider(1.0, 0.0, 3.0, 0.05, description="Saturation",
+            FloatSlider(value=1.0, min=0.0, max=3.0, step=0.05, description="Saturation",
                        style={'description_width': '100px'}, layout={'width': '280px'}),
-            FloatSlider(0, -50, 50, 1, description="Vibrance",
+            FloatSlider(value=0, min=-50, max=50, step=1, description="Vibrance",
                        style={'description_width': '100px'}, layout={'width': '280px'}),
-            FloatSlider(0, -30, 30, 1, description="Warmth",
+            FloatSlider(value=0, min=-30, max=30, step=1, description="Warmth",
                        style={'description_width': '100px'}, layout={'width': '280px'}),
-            FloatSlider(0, -30, 30, 1, description="Tint",
+            FloatSlider(value=0, min=-30, max=30, step=1, description="Tint",
                        style={'description_width': '100px'}, layout={'width': '280px'})
         ]
         
         # Tone controls
         tone_controls = [
-            FloatSlider(0, -2.0, 2.0, 0.1, description="Exposure",
+            FloatSlider(value=1.0, min=0.0, max=3.0, step=0.05, description="Exposure",
                        style={'description_width': '100px'}, layout={'width': '280px'}),
-            FloatSlider(0, -50, 50, 1, description="Highlights",
+            FloatSlider(value=0, min=-50, max=50, step=1, description="Vibrance",
                        style={'description_width': '100px'}, layout={'width': '280px'}),
-            FloatSlider(0, -50, 50, 1, description="Shadows",
+            FloatSlider(value=0, min=-30, max=30, step=1, description="Warmth",
                        style={'description_width': '100px'}, layout={'width': '280px'}),
-            FloatSlider(0, -50, 50, 1, description="Clarity",
+            FloatSlider(value=0, min=-30, max=30, step=1, description="Tint",
                        style={'description_width': '100px'}, layout={'width': '280px'})
         ]
         
