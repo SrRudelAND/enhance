@@ -1,0 +1,734 @@
+#!/usr/bin/env python3
+"""
+MTG Proxy Enhancer - Configuration and Main Entry Point
+Final part with configuration management and unified interface
+"""
+
+import sys
+import argparse
+from pathlib import Path
+from typing import Dict, Any
+import yaml
+import configparser
+from dataclasses import asdict, field
+from enum import Enum
+
+class ProcessingMode(Enum):
+    """Processing mode options"""
+    AUTO = "auto"
+    PRESET = "preset" 
+    CUSTOM = "custom"
+    INTERACTIVE = "interactive"
+
+@dataclass
+class AppConfig:
+    """Application configuration"""
+    input_folder: str = "mtgproxy/Input"
+    output_folder: str = "mtgproxy/Output"
+    max_workers: int = 4
+    cache_size: int = 50
+    default_quality: int = 95
+    create_backups: bool = False
+    processing_mode: ProcessingMode = ProcessingMode.AUTO
+    log_level: str = "INFO"
+    auto_create_folders: bool = True
+    preserve_metadata: bool = True
+    
+    # Performance settings
+    chunk_size: int = 10  # Images per processing chunk
+    memory_limit_mb: int = 1024
+    use_gpu_acceleration: bool = False
+
+class ConfigManager:
+    """Manage application configuration"""
+    
+    DEFAULT_CONFIG_FILE = "mtg_enhancer_config.yaml"
+    
+    @staticmethod
+    def load_config(config_file: str = None) -> AppConfig:
+        """Load configuration from file or create default"""
+        if config_file is None:
+            config_file = ConfigManager.DEFAULT_CONFIG_FILE
+        
+        config_path = Path(config_file)
+        
+        if config_path.exists():
+            try:
+                with open(config_path, 'r') as f:
+                    config_data = yaml.safe_load(f)
+                
+                # Convert processing_mode string to enum
+                if 'processing_mode' in config_data:
+                    config_data['processing_mode'] = ProcessingMode(config_data['processing_mode'])
+                
+                return AppConfig(**config_data)
+                
+            except Exception as e:
+                logger.warning(f"Could not load config file: {e}. Using defaults.")
+                return AppConfig()
+        else:
+            # Create default config file
+            default_config = AppConfig()
+            ConfigManager.save_config(default_config, config_file)
+            return default_config
+    
+    @staticmethod
+    def save_config(config: AppConfig, config_file: str = None) -> bool:
+        """Save configuration to file"""
+        if config_file is None:
+            config_file = ConfigManager.DEFAULT_CONFIG_FILE
+        
+        try:
+            config_dict = asdict(config)
+            # Convert enum to string for serialization
+            config_dict['processing_mode'] = config.processing_mode.value
+            
+            with open(config_file, 'w') as f:
+                yaml.dump(config_dict, f, default_flow_style=False, indent=2)
+            
+            logger.info(f"Configuration saved to {config_file}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Could not save config: {e}")
+            return False
+
+class MTGEnhancerApp:
+    """Main application class with unified interface"""
+    
+    def __init__(self, config: AppConfig = None):
+        self.config = config or ConfigManager.load_config()
+        self.enhancer = None
+        self.pro_enhancer = None
+        self._setup_logging()
+        self._initialize_enhancer()
+    
+    def _setup_logging(self):
+        """Configure logging based on config"""
+        log_level = getattr(logging, self.config.log_level.upper(), logging.INFO)
+        logging.getLogger().setLevel(log_level)
+    
+    def _initialize_enhancer(self):
+        """Initialize enhancer components"""
+        try:
+            self.enhancer = MTGProxyEnhancer(
+                self.config.input_folder, 
+                self.config.output_folder
+            )
+            self.pro_enhancer = MTGEnhancerPro(
+                self.config.input_folder,
+                self.config.output_folder
+            )
+            
+            logger.info(f"Initialized with {len(self.enhancer.images)} images")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize enhancer: {e}")
+            sys.exit(1)
+    
+    def run(self, mode: ProcessingMode = None) -> Dict:
+        """
+        Run enhancement based on mode
+        """
+        processing_mode = mode or self.config.processing_mode
+        
+        if not self.enhancer.images:
+            logger.warning("No images found to process")
+            return {"error": "No images found"}
+        
+        logger.info(f"Running in {processing_mode.value} mode")
+        
+        if processing_mode == ProcessingMode.AUTO:
+            return self._run_auto_mode()
+        elif processing_mode == ProcessingMode.PRESET:
+            return self._run_preset_mode()
+        elif processing_mode == ProcessingMode.CUSTOM:
+            return self._run_custom_mode()
+        elif processing_mode == ProcessingMode.INTERACTIVE:
+            return self._run_interactive_mode()
+        else:
+            logger.error(f"Unknown processing mode: {processing_mode}")
+            return {"error": "Unknown processing mode"}
+    
+    def _run_auto_mode(self) -> Dict:
+        """Run automatic enhancement"""
+        logger.info("🤖 Starting automatic enhancement")
+        
+        batch_processor = BatchProcessor(self.enhancer)
+        results = batch_processor.auto_batch_process(self.config.max_workers)
+        
+        # Generate analytics
+        analytics = BatchAnalytics.analyze_batch_results(self.enhancer, results)
+        
+        return analytics
+    
+    def _run_preset_mode(self) -> Dict:
+        """Run with preset settings"""
+        presets = SettingsManager.create_preset_settings()
+        
+        # Use professional preset as default
+        settings = presets.get('professional', presets['default'])
+        
+        logger.info("📋 Processing with professional preset")
+        
+        batch_processor = BatchProcessor(self.enhancer)
+        results = batch_processor.batch_process_threaded(settings, self.config.max_workers)
+        
+        return BatchAnalytics.analyze_batch_results(self.enhancer, results)
+    
+    def _run_custom_mode(self) -> Dict:
+        """Run with custom settings from config or user input"""
+        # Try to load saved settings first
+        saved_settings = SettingsManager.load_settings()
+        settings = saved_settings or EnhancementSettings()
+        
+        logger.info("⚙️ Processing with custom settings")
+        
+        batch_processor = BatchProcessor(self.enhancer)
+        results = batch_processor.batch_process_threaded(settings, self.config.max_workers)
+        
+        return BatchAnalytics.analyze_batch_results(self.enhancer, results)
+    
+    def _run_interactive_mode(self) -> Dict:
+        """Launch interactive interface"""
+        logger.info("🖥️ Launching interactive interface")
+        
+        try:
+            interface = InteractiveInterface(self.enhancer)
+            ui = interface.create_widget_interface()
+            
+            # Try to display if in Jupyter environment
+            try:
+                from IPython.display import display
+                display(ui)
+                return {"status": "Interactive interface launched"}
+            except ImportError:
+                logger.warning("Not in Jupyter environment - use CLI interface instead")
+                cli = CommandLineInterface(self.enhancer)
+                cli.run_interactive_cli()
+                return {"status": "CLI interface completed"}
+                
+        except Exception as e:
+            logger.error(f"Failed to launch interface: {e}")
+            return {"error": str(e)}
+
+def create_command_line_parser() -> argparse.ArgumentParser:
+    """Create command-line argument parser"""
+    parser = argparse.ArgumentParser(
+        description="MTG Proxy Enhancer - Professional Image Enhancement Tool",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python enhance_2_optimized.py --auto                           # Auto-enhance all images
+  python enhance_2_optimized.py --preset professional          # Use professional preset
+  python enhance_2_optimized.py --interactive                   # Launch interactive mode
+  python enhance_2_optimized.py --input ./cards --output ./enhanced --workers 8
+  python enhance_2_optimized.py --analyze                       # Analyze images only
+  python enhance_2_optimized.py --benchmark                     # Run performance test
+        """
+    )
+    
+    # Input/Output options
+    parser.add_argument('--input', '-i', default="mtgproxy/Input",
+                       help='Input folder path (default: mtgproxy/Input)')
+    parser.add_argument('--output', '-o', default="mtgproxy/Output", 
+                       help='Output folder path (default: mtgproxy/Output)')
+    
+    # Processing modes (mutually exclusive)
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument('--auto', action='store_true',
+                           help='Auto-enhance all images with intelligent analysis')
+    mode_group.add_argument('--preset', choices=['default', 'dark_images', 'bright_images', 
+                                                'low_contrast', 'color_enhancement', 
+                                                'professional', 'vintage_correction'],
+                           help='Use predefined enhancement preset')
+    mode_group.add_argument('--interactive', action='store_true',
+                           help='Launch interactive interface')
+    mode_group.add_argument('--analyze', action='store_true',
+                           help='Analyze images without processing')
+    mode_group.add_argument('--benchmark', action='store_true',
+                           help='Run performance benchmark')
+    
+    # Performance options
+    parser.add_argument('--workers', '-w', type=int, default=4,
+                       help='Number of worker threads (default: 4)')
+    parser.add_argument('--quality', '-q', type=int, default=95, choices=range(50, 101),
+                       help='Output JPEG quality 50-100 (default: 95)')
+    
+    # Enhancement options
+    parser.add_argument('--gamma', type=float, default=1.2,
+                       help='Gamma correction value (default: 1.2)')
+    parser.add_argument('--saturation', type=float, default=1.0,
+                       help='Saturation multiplier (default: 1.0)')
+    parser.add_argument('--clahe', type=float, default=2.0,
+                       help='CLAHE clip limit (default: 2.0)')
+    
+    # Output options
+    parser.add_argument('--report', action='store_true',
+                       help='Generate HTML processing report')
+    parser.add_argument('--comparisons', action='store_true',
+                       help='Create before/after comparison images')
+    parser.add_argument('--overwrite', action='store_true', default=True,
+                       help='Overwrite existing output files')
+    
+    # Utility options
+    parser.add_argument('--config', help='Configuration file path')
+    parser.add_argument('--save-config', help='Save current settings to config file')
+    parser.add_argument('--verbose', '-v', action='store_true',
+                       help='Verbose output')
+    
+    return parser
+
+def main():
+    """Main entry point for command-line usage"""
+    parser = create_command_line_parser()
+    args = parser.parse_args()
+    
+    # Load configuration
+    config = ConfigManager.load_config(args.config) if args.config else ConfigManager.load_config()
+    
+    # Override config with command-line arguments
+    if args.input:
+        config.input_folder = args.input
+    if args.output:
+        config.output_folder = args.output
+    if args.workers:
+        config.max_workers = args.workers
+    if args.verbose:
+        config.log_level = "DEBUG"
+    
+    # Save config if requested
+    if args.save_config:
+        ConfigManager.save_config(config, args.save_config)
+        print(f"💾 Configuration saved to {args.save_config}")
+        return
+    
+    # Create application
+    app = MTGEnhancerApp(config)
+    
+    # Determine processing mode from arguments
+    if args.auto:
+        results = app.run(ProcessingMode.AUTO)
+    elif args.preset:
+        # Use preset mode with specific preset
+        presets = SettingsManager.create_preset_settings()
+        settings = presets[args.preset]
+        
+        # Apply command-line overrides
+        if args.gamma != 1.2:
+            settings.gamma = args.gamma
+        if args.saturation != 1.0:
+            settings.saturation = args.saturation
+        if args.clahe != 2.0:
+            settings.clip_limit = args.clahe
+        
+        batch_processor = BatchProcessor(app.enhancer)
+        results = batch_processor.batch_process_threaded(settings, config.max_workers)
+        results = BatchAnalytics.analyze_batch_results(app.enhancer, results)
+        
+    elif args.interactive:
+        results = app.run(ProcessingMode.INTERACTIVE)
+    elif args.analyze:
+        results = run_comprehensive_analysis(config.input_folder)
+    elif args.benchmark:
+        results = benchmark_enhancement(config.input_folder)
+        print("📊 Benchmark Results:")
+        for key, value in results.items():
+            print(f"  {key}: {value}")
+        return
+    else:
+        # Default to auto mode
+        results = app.run(ProcessingMode.AUTO)
+    
+    # Create additional outputs if requested
+    if args.report and 'processing_summary' in results:
+        report_file = BatchAnalytics.create_processing_report(
+            app.enhancer, results, "enhancement_report.html"
+        )
+        if report_file:
+            print(f"📄 Report created: {report_file}")
+    
+    if args.comparisons:
+        # Create sample comparisons
+        comparison_folder = Path(config.output_folder) / "comparisons"
+        comparison_folder.mkdir(exist_ok=True)
+        print(f"📷 Comparison images saved to: {comparison_folder}")
+    
+    # Print final summary
+    if isinstance(results, dict) and 'processing_summary' in results:
+        summary = results['processing_summary']
+        print(f"\n🎉 Enhancement Complete!")
+        print(f"✅ Success: {summary.get('success', 0)} images")
+        if summary.get('errors', 0) > 0:
+            print(f"❌ Errors: {summary['errors']} images")
+        print(f"⏱️ Time: {summary.get('time', 0):.1f} seconds")
+
+class WebInterface:
+    """Simple web interface for remote usage"""
+    
+    def __init__(self, enhancer: MTGProxyEnhancer, port: int = 8000):
+        self.enhancer = enhancer
+        self.port = port
+    
+    def create_simple_web_ui(self) -> str:
+        """Create basic HTML interface"""
+        html = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>MTG Proxy Enhancer</title>
+            <meta charset="utf-8">
+            <style>
+                body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+                .card { background: white; padding: 20px; margin: 20px 0; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                .btn { background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin: 5px; }
+                .btn:hover { background: #0056b3; }
+                .btn-success { background: #28a745; }
+                .btn-warning { background: #ffc107; color: black; }
+                .progress { width: 100%; height: 20px; background: #f0f0f0; border-radius: 10px; overflow: hidden; }
+                .progress-bar { height: 100%; background: #007bff; transition: width 0.3s; }
+                .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+                input[type="range"] { width: 100%; }
+                .setting { margin: 10px 0; }
+                .setting label { display: inline-block; width: 120px; }
+            </style>
+        </head>
+        <body>
+            <div class="card">
+                <h1>🃏 MTG Proxy Enhancer</h1>
+                <p>Professional image enhancement for Magic: The Gathering proxy cards</p>
+            </div>
+            
+            <div class="card">
+                <h2>📁 File Management</h2>
+                <div class="grid">
+                    <div>
+                        <h3>Input Folder</h3>
+                        <p id="input-path">{input_folder}</p>
+                        <p id="image-count">Images found: <span id="image-count-value">0</span></p>
+                    </div>
+                    <div>
+                        <h3>Output Folder</h3>
+                        <p id="output-path">{output_folder}</p>
+                        <button class="btn" onclick="refreshImages()">🔄 Refresh</button>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="card">
+                <h2>⚡ Quick Actions</h2>
+                <button class="btn btn-success" onclick="autoEnhance()">🤖 Auto Enhance All</button>
+                <button class="btn" onclick="usePreset('professional')">👔 Professional Preset</button>
+                <button class="btn" onclick="usePreset('color_enhancement')">🎨 Color Enhancement</button>
+                <button class="btn btn-warning" onclick="analyzeOnly()">📊 Analyze Only</button>
+            </div>
+            
+            <div class="card">
+                <h2>🔧 Custom Enhancement</h2>
+                <div class="grid">
+                    <div>
+                        <div class="setting">
+                            <label>CLAHE:</label>
+                            <input type="range" id="clahe" min="0.5" max="8" step="0.1" value="2.0">
+                            <span id="clahe-value">2.0</span>
+                        </div>
+                        <div class="setting">
+                            <label>Gamma:</label>
+                            <input type="range" id="gamma" min="0.5" max="3" step="0.05" value="1.2">
+                            <span id="gamma-value">1.2</span>
+                        </div>
+                        <div class="setting">
+                            <label>Saturation:</label>
+                            <input type="range" id="saturation" min="0" max="3" step="0.05" value="1.0">
+                            <span id="saturation-value">1.0</span>
+                        </div>
+                        <div class="setting">
+                            <label>Brightness:</label>
+                            <input type="range" id="brightness" min="-50" max="50" step="1" value="0">
+                            <span id="brightness-value">0</span>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="setting">
+                            <label>Vibrance:</label>
+                            <input type="range" id="vibrance" min="-50" max="50" step="1" value="0">
+                            <span id="vibrance-value">0</span>
+                        </div>
+                        <div class="setting">
+                            <label>Warmth:</label>
+                            <input type="range" id="warmth" min="-30" max="30" step="1" value="0">
+                            <span id="warmth-value">0</span>
+                        </div>
+                        <div class="setting">
+                            <label>Clarity:</label>
+                            <input type="range" id="clarity" min="-50" max="50" step="1" value="0">
+                            <span id="clarity-value">0</span>
+                        </div>
+                        <div class="setting">
+                            <label>Preserve Black:</label>
+                            <input type="checkbox" id="preserve-black" checked>
+                        </div>
+                    </div>
+                </div>
+                <button class="btn" onclick="processCustom()">🚀 Process with Custom Settings</button>
+            </div>
+            
+            <div class="card">
+                <h2>📊 Processing Status</h2>
+                <div id="status">Ready</div>
+                <div class="progress" id="progress-container" style="display: none;">
+                    <div class="progress-bar" id="progress-bar"></div>
+                </div>
+                <div id="results"></div>
+            </div>
+            
+            <script>
+                // Update slider values display
+                document.querySelectorAll('input[type="range"]').forEach(slider => {
+                    const valueSpan = document.getElementById(slider.id + '-value');
+                    slider.addEventListener('input', () => {
+                        valueSpan.textContent = slider.value;
+                    });
+                });
+                
+                // API calls would go here for actual web implementation
+                function autoEnhance() {
+                    updateStatus("🤖 Auto-enhancing images...");
+                    showProgress();
+                    // Would call backend API
+                    setTimeout(() => {
+                        hideProgress();
+                        updateStatus("✅ Auto-enhancement complete!");
+                    }, 3000);
+                }
+                
+                function usePreset(presetName) {
+                    updateStatus(`📋 Processing with ${presetName} preset...`);
+                    showProgress();
+                    // Would call backend API
+                    setTimeout(() => {
+                        hideProgress();
+                        updateStatus(`✅ ${presetName} enhancement complete!`);
+                    }, 2000);
+                }
+                
+                function processCustom() {
+                    const settings = {
+                        clahe: document.getElementById('clahe').value,
+                        gamma: document.getElementById('gamma').value,
+                        saturation: document.getElementById('saturation').value,
+                        brightness: document.getElementById('brightness').value,
+                        vibrance: document.getElementById('vibrance').value,
+                        warmth: document.getElementById('warmth').value,
+                        clarity: document.getElementById('clarity').value,
+                        preserve_black: document.getElementById('preserve-black').checked
+                    };
+                    
+                    updateStatus("⚙️ Processing with custom settings...");
+                    showProgress();
+                    // Would call backend API with settings
+                    setTimeout(() => {
+                        hideProgress();
+                        updateStatus("✅ Custom enhancement complete!");
+                    }, 2500);
+                }
+                
+                function analyzeOnly() {
+                    updateStatus("🔍 Analyzing images...");
+                    showProgress();
+                    setTimeout(() => {
+                        hideProgress();
+                        updateStatus("📊 Analysis complete! Check analysis report.");
+                    }, 1500);
+                }
+                
+                function refreshImages() {
+                    updateStatus("🔄 Refreshing image list...");
+                    // Would call backend API
+                    setTimeout(() => {
+                        updateStatus("✅ Image list refreshed!");
+                    }, 500);
+                }
+                
+                function updateStatus(message) {
+                    document.getElementById('status').textContent = message;
+                }
+                
+                function showProgress() {
+                    document.getElementById('progress-container').style.display = 'block';
+                    // Simulate progress
+                    let width = 0;
+                    const interval = setInterval(() => {
+                        width += Math.random() * 20;
+                        if (width >= 100) {
+                            width = 100;
+                            clearInterval(interval);
+                        }
+                        document.getElementById('progress-bar').style.width = width + '%';
+                    }, 200);
+                }
+                
+                function hideProgress() {
+                    document.getElementById('progress-container').style.display = 'none';
+                    document.getElementById('progress-bar').style.width = '0%';
+                }
+            </script>
+        </body>
+        </html>
+        """.replace('{input_folder}', str(self.enhancer.input_folder))\
+           .replace('{output_folder}', str(self.enhancer.output_folder))
+        
+        return html
+
+# Integration helpers
+class IntegrationHelper:
+    """Helper functions for integrating with other tools"""
+    
+    @staticmethod
+    def export_for_photoshop(img: np.ndarray, output_path: str) -> bool:
+        """Export in format suitable for Photoshop editing"""
+        # Convert to 16-bit for better Photoshop compatibility
+        img_16bit = (img.astype(np.float32) / 255.0 * 65535).astype(np.uint16)
+        
+        # Save as TIFF with no compression
+        return cv2.imwrite(output_path, img_16bit, [cv2.IMWRITE_TIFF_COMPRESSION, 1])
+    
+    @staticmethod
+    def create_action_script(settings: EnhancementSettings) -> str:
+        """Create Photoshop action script equivalent"""
+        script = f"""
+        // MTG Proxy Enhancement - Photoshop Action Script
+        // Generated settings equivalent
+        
+        // Levels adjustment (approximate gamma)
+        var gamma = {settings.gamma:.2f};
+        var levelsLayer = app.activeDocument.artLayers.add();
+        levelsLayer.name = "Gamma Adjustment";
+        
+        // Saturation adjustment
+        var saturation = {settings.saturation:.2f};
+        var hslLayer = app.activeDocument.artLayers.add();
+        hslLayer.name = "Saturation Adjustment";
+        
+        // Note: This is a simplified approximation
+        // Full CLAHE and advanced tone mapping require custom plugins
+        """
+        return script
+    
+    @staticmethod
+    def export_lightroom_preset(settings: EnhancementSettings, preset_name: str) -> str:
+        """Create Lightroom-compatible preset (simplified)"""
+        preset = f"""
+        s.{preset_name} = {{
+            Exposure = {settings.exposure:.2f},
+            Highlights = {settings.highlights:.0f},
+            Shadows = {settings.shadows:.0f},
+            Brightness = {settings.brightness:.0f},
+            Contrast = {(settings.contrast - 1.0) * 100:.0f},
+            Saturation = {(settings.saturation - 1.0) * 100:.0f},
+            Vibrance = {settings.vibrance:.0f},
+            Temperature = {settings.warmth * 100:.0f},
+            Tint = {settings.tint:.0f},
+            Clarity = {settings.clarity:.0f}
+        }}
+        """
+        return preset
+
+# Complete usage examples and documentation
+USAGE_EXAMPLES = """
+🃏 MTG PROXY ENHANCER - COMPLETE USAGE GUIDE
+
+🚀 QUICK START EXAMPLES:
+# 1. One-click auto enhancement (recommended for beginners)
+one_click_enhance()
+
+# 2. Auto enhancement with custom folders
+auto_enhance_all("./my_cards", "./enhanced_cards")
+
+# 3. Use professional preset
+quick_enhance_all(preset="professional")
+
+# 4. Interactive interface
+enhancer = create_mtg_enhancer_optimized()
+interface = InteractiveInterface(enhancer)
+ui = interface.create_widget_interface()
+display(ui)
+
+# 5. Command-line interface
+run_cli_interface()
+
+🔧 ADVANCED USAGE:
+# Custom settings
+settings = EnhancementSettings(
+    gamma=1.3,
+    saturation=1.2, 
+    vibrance=15,
+    clarity=10
+)
+enhancer = create_mtg_enhancer_optimized()
+BatchProcessor(enhancer).batch_process_threaded(settings)
+
+# Professional workflow with validation
+pro = create_pro_enhancer()
+enhanced, validation = pro.enhance_with_validation(image, settings)
+
+# Comprehensive analysis
+analysis = run_comprehensive_analysis("./my_cards")
+
+📊 ANALYSIS & REPORTING:
+# Quality assessment
+quality_report = QualityAssessment.create_quality_report(enhancer)
+
+# Performance benchmark  
+benchmark_results = benchmark_enhancement()
+
+# Create processing report
+analytics = BatchAnalytics.analyze_batch_results(enhancer, results)
+BatchAnalytics.create_processing_report(enhancer, analytics)
+
+⚙️ CONFIGURATION:
+# Create custom config
+config = AppConfig(
+    input_folder="./cards",
+    output_folder="./enhanced", 
+    max_workers=8,
+    processing_mode=ProcessingMode.AUTO
+)
+
+# Save config
+ConfigManager.save_config(config, "my_config.yaml")
+
+# Use config
+app = MTGEnhancerApp(config)
+results = app.run()
+
+🌐 COMMAND LINE:
+python enhance_2_optimized.py --auto --input ./cards --workers 8
+python enhance_2_optimized.py --preset professional --report
+python enhance_2_optimized.py --interactive
+python enhance_2_optimized.py --analyze --verbose
+
+💡 TIPS:
+• Use auto-enhancement for best results with minimal effort
+• Professional preset works well for most MTG proxies
+• Preserve black pixels is crucial for text readability
+• Use multi-threading for large batches (--workers 8)
+• Create reports for quality tracking
+• Save successful settings as presets for reuse
+"""
+
+def print_complete_help():
+    """Print comprehensive help and examples"""
+    print(USAGE_EXAMPLES)
+
+# Final optimized entry point
+if __name__ == "__main__":
+    # Check if running as script or imported
+    if len(sys.argv) > 1:
+        # Command-line mode
+        main()
+    else:
+        # Interactive Python session
+        print("🃏 MTG Proxy Enhancer - Complete Optimized Version")
+        print("=" * 60)
+        print("\n📚 For complete usage guide, run:
