@@ -716,4 +716,21 @@ def one_click_enhance(input_folder: str = "mtgproxy/Input",
     return results
 
 if __name__ == "__main__":
-    print("🃏 MTG Proxy Enhancer - Advance
+    print("🃏 MTG Proxy Enhancer - Advanced Features Loaded!")
+    print("\n🚀 PROFESSIONAL FEATURES:")
+    print("• one_click_enhance() - Complete auto-processing with reports")
+    print("• run_comprehensive_analysis() - Detailed image analysis")  
+    print("• create_pro_enhancer() - Full-featured enhancer")
+    print("• create_enhancement_preview(image_path, settings) - Single image preview")
+    
+    print("\n📊 ANALYSIS TOOLS:")
+    print("• Quality assessment and validation")
+    print("• Card region detection (text/art/borders)")
+    print("• Performance benchmarking")
+    print("• HTML report generation")
+    
+    print("\n⚡ OPTIMIZATIONS:")
+    print("• Multi-threaded batch processing")
+    print("• Intelligent caching system")  
+    print("• Vectorized image operations")
+    print("• Memory-efficient processing pipeline")
