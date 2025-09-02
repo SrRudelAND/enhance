@@ -3117,10 +3117,7 @@ class GPUImageProcessor:
             return self._enhance_cpu_fallback(img, settings)
     
     def _enhance_cpu_fallback(self, img: np.ndarray, settings):
-        """CPU fallback - use your existing enhance_image method"""
-        # This calls your existing CPU-based enhancement
-        from enhance_2_optimized import ImageProcessor
-        
+        """CPU fallback - use existing enhance_image method"""
         # Apply existing CPU processing pipeline
         enhanced = img.copy()
         
@@ -3187,8 +3184,7 @@ class MTGProxyEnhancerGPU:
     
     def __init__(self, input_folder: str = "mtgproxy/Input", 
                  output_folder: str = "mtgproxy/Output"):
-        # Initialize base enhancer
-        from enhance_2_optimized import MTGProxyEnhancer
+        # Initialize base enhancer (classes already defined in notebook)
         self.base_enhancer = MTGProxyEnhancer(input_folder, output_folder)
         
         # Initialize GPU processor
@@ -3209,14 +3205,12 @@ class MTGProxyEnhancerGPU:
         
         # Preserve black pixels (CPU operation)
         if settings.preserve_black:
-            from enhance_2_optimized import ImageProcessor
             enhanced = ImageProcessor.preserve_black_pixels(original, enhanced, settings.black_threshold)
         
         return enhanced
     
     def _apply_advanced_cpu_operations(self, img: np.ndarray, settings) -> np.ndarray:
         """Apply operations that don't have good GPU implementations yet"""
-        from enhance_2_optimized import ImageProcessor
         
         # Advanced tone mapping (CPU for now)
         if any(x != 0 for x in [settings.highlights, settings.shadows, settings.whites, settings.blacks]):
@@ -3238,7 +3232,6 @@ class MTGProxyEnhancerGPU:
     
     def batch_process_gpu(self, settings, max_workers: int = 4, use_gpu: bool = True):
         """GPU-accelerated batch processing"""
-        from enhance_2_optimized import BatchProcessor
         
         # Temporarily override the enhancement method
         if use_gpu:
@@ -3269,7 +3262,6 @@ class MTGProxyEnhancerGPU:
             return
         
         # Test settings
-        from enhance_2_optimized import EnhancementSettings
         settings = EnhancementSettings(
             gamma=1.3, 
             brightness=10, 
@@ -3295,7 +3287,6 @@ def auto_enhance_all_gpu(input_folder: str = "mtgproxy/Input",
     gpu_enhancer = create_gpu_enhancer(input_folder, output_folder)
     
     # Use auto-enhancement with GPU
-    from enhance_2_optimized import EnhancementSettings
     settings = EnhancementSettings()  # Default settings
     
     results = gpu_enhancer.batch_process_gpu(settings, max_workers, use_gpu=True)
