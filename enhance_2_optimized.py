@@ -2894,31 +2894,166 @@ def print_complete_help():
     """Print comprehensive help and examples"""
     print(USAGE_EXAMPLES)
 
+def create_action_buttons(enhancer):
+    """Create clickable buttons for additional actions"""
+    from ipywidgets import Button, HBox, VBox, Output, HTML
+    from IPython.display import clear_output
+    
+    # Action buttons
+    one_click_btn = Button(
+        description="🚀 One-Click Enhance", 
+        button_style='success',
+        layout={'width': '200px', 'height': '40px'},
+        tooltip="Auto-enhance all images with reports"
+    )
+    
+    analysis_btn = Button(
+        description="📊 Comprehensive Analysis", 
+        button_style='info',
+        layout={'width': '200px', 'height': '40px'},
+        tooltip="Detailed analysis of all images"
+    )
+    
+    cli_btn = Button(
+        description="💻 CLI Interface", 
+        button_style='primary',
+        layout={'width': '200px', 'height': '40px'},
+        tooltip="Command-line interface"
+    )
+    
+    auto_enhance_btn = Button(
+        description="⚡ Auto Enhance All", 
+        button_style='warning',
+        layout={'width': '200px', 'height': '40px'},
+        tooltip="Quick auto-processing"
+    )
+    
+    gpu_demo_btn = Button(
+        description="🖥️ GPU Demo", 
+        button_style='primary',
+        layout={'width': '200px', 'height': '40px'},
+        tooltip="Test GPU acceleration"
+    )
+    
+    help_btn = Button(
+        description="📚 Complete Help", 
+        button_style='info',
+        layout={'width': '200px', 'height': '40px'},
+        tooltip="Show complete usage guide"
+    )
+    
+    # Output area for button actions
+    action_output = Output()
+    
+    # Event handlers
+    def on_one_click(b):
+        with action_output:
+            clear_output()
+            print("🚀 Starting one-click enhancement...")
+            try:
+                results = one_click_enhance()
+                print("✅ One-click enhancement completed!")
+            except Exception as e:
+                print(f"❌ Error: {e}")
+    
+    def on_analysis(b):
+        with action_output:
+            clear_output()
+            print("📊 Running comprehensive analysis...")
+            try:
+                results = run_comprehensive_analysis()
+                print("✅ Analysis completed!")
+            except Exception as e:
+                print(f"❌ Error: {e}")
+    
+    def on_cli(b):
+        with action_output:
+            clear_output()
+            print("💻 Launching CLI interface...")
+            try:
+                run_cli_interface()
+            except Exception as e:
+                print(f"❌ Error: {e}")
+    
+    def on_auto_enhance(b):
+        with action_output:
+            clear_output()
+            print("⚡ Auto-enhancing all images...")
+            try:
+                results = auto_enhance_all()
+                print("✅ Auto-enhancement completed!")
+            except Exception as e:
+                print(f"❌ Error: {e}")
+    
+    def on_gpu_demo(b):
+        with action_output:
+            clear_output()
+            print("🖥️ Running GPU acceleration demo...")
+            try:
+                demo_gpu_acceleration()
+            except Exception as e:
+                print(f"❌ Error: {e}")
+    
+    def on_help(b):
+        with action_output:
+            clear_output()
+            print_complete_help()
+    
+    # Connect event handlers
+    one_click_btn.on_click(on_one_click)
+    analysis_btn.on_click(on_analysis)
+    cli_btn.on_click(on_cli)
+    auto_enhance_btn.on_click(on_auto_enhance)
+    gpu_demo_btn.on_click(on_gpu_demo)
+    help_btn.on_click(on_help)
+    
+    # Layout buttons in rows
+    button_rows = VBox([
+        HTML("<h3>🎯 Quick Actions</h3>"),
+        HBox([one_click_btn, auto_enhance_btn, analysis_btn]),
+        HBox([cli_btn, gpu_demo_btn, help_btn]),
+        HTML("<p><i>Click any button above to run that action. Results will appear below:</i></p>"),
+        action_output
+    ])
+    
+    return button_rows
+    
 # Final optimized entry point
 if __name__ == "__main__":
     # Check if running in Jupyter (avoid argument parsing conflicts)
     try:
         from IPython import get_ipython
         if get_ipython() is not None:
-            # Running in Jupyter - skip command line parsing
+            # Running in Jupyter - show interface by default
             print("🃏 MTG Proxy Enhancer - Complete Optimized Version")
             print("=" * 60)
-            print("\n📚 For complete usage guide, run: print_complete_help()")
-            print("\n🚀 INSTANT START:")
-            print("• one_click_enhance() - Auto-enhance everything")
-            print("• run_cli_interface() - Interactive command-line")
-            print("• auto_enhance_all() - Quick auto-processing")
             
             try:
-                # Auto-initialize if images present
+                # Auto-initialize and show interface
                 enhancer = create_mtg_enhancer_optimized()
+                
                 if enhancer.images:
-                    print(f"\n✅ Ready! Found {len(enhancer.images)} images")
-                    print("🎯 Quick start: one_click_enhance()")
+                    print(f"✅ Ready! Found {len(enhancer.images)} images")
+                    print("🎯 Interactive interface loading...\n")
+                    
+                    # Show interactive interface by default
+                    interface = InteractiveInterface(enhancer)
+                    ui = interface.create_widget_interface()
+                    display(ui)
+                    
+                    # Show action buttons below the interface
+                    print("\n" + "="*60)
+                    print("🚀 ADDITIONAL ACTIONS:")
+                    display(create_action_buttons(enhancer))
+                    
                 else:
-                    print(f"\n📂 Add images to '{enhancer.input_folder}' to begin")
+                    print(f"📂 Add images to '{enhancer.input_folder}' to begin")
+                    print("📚 For complete usage guide, run: print_complete_help()")
+                    
             except Exception as e:
                 logger.error(f"Initialization error: {e}")
+                print("📚 For complete usage guide, run: print_complete_help()")
+                
         else:
             # Running as script - use command line parsing
             main()
