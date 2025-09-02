@@ -274,10 +274,13 @@ class ImageProcessor:
         
         # Tint adjustment in BGR space
         if tint != 0:
+            result = result.astype(np.float32)  # Convert to float first
             if tint > 0:  # More magenta
-                result[..., [0, 2]] = np.clip(result[..., [0, 2]] + tint, 0, 255)
+                result[..., [0, 2]] += tint  # Add to blue and red channels
             else:  # More green
-                result[..., 1] = np.clip(result[..., 1] - tint, 0, 255)
+                result[..., 1] -= tint  # Subtract from green channel (tint is negative)
+            
+            result = np.clip(result, 0, 255).astype(np.uint8)  # Convert back to uint8
         
         return result
 
