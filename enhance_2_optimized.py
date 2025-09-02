@@ -3044,16 +3044,24 @@ class GPUImageProcessor:
             logger.warning(f"GPU processing failed, falling back to CPU: {e}")
             return self._enhance_cpu_fallback(img, settings)
     
+
     def _enhance_cuda(self, img: np.ndarray, settings) -> np.ndarray:
         """CUDA-accelerated enhancement (NVIDIA GPUs)"""
         try:
+            # Validate input image
+            if img is None or img.size == 0:
+                raise ValueError("Input image is empty or invalid")
+
             # Upload image to GPU memory
             gpu_img = cv2.cuda_GpuMat()
             gpu_img.upload(img)
 
             # Convert to float for processing (manual scaling to [0, 1])
             gpu_float = cv2.cuda_GpuMat()
-            gpu_float.upload(img.astype(np.float32) / 255.0)  # Manual scaling on CPU
+            gpu_float.upload(img.astype(np.float32) / 255.0)  # Shape: (height, width, 3), type: CV_32FC3
+
+            # Log GPU image details for debugging
+            logger.debug(f"gpu_float size={gpu_float.size()}, type={gpu_float.type()}")
 
             # Apply gamma correction
             if abs(settings.gamma - 1.0) > 0.001:
@@ -3061,26 +3069,39 @@ class GPUImageProcessor:
 
             # Apply brightness and contrast
             if settings.brightness != 0 or settings.contrast != 1.0:
-                # Contrast: multiply by contrast factor
-                contrast_mat = cv2.cuda_GpuMat(gpu_float.size(), gpu_float.type())
-                contrast_mat.upload(np.full(gpu_float.size(), settings.contrast, dtype=np.float32))
+                # Create contrast matrix (same size and type as gpu_float)
+                contrast_array = np.full((gpu_float.size()[1], gpu_float.size()[0], 3), 
+                                       settings.contrast, dtype=np.float32)
+                contrast_mat = cv2.cuda_GpuMat()
+                contrast_mat.upload(contrast_array)
+                logger.debug(f"contrast_mat size={contrast_mat.size()}, type={contrast_mat.type()}")
                 gpu_float = cv2.cuda.multiply(gpu_float, contrast_mat)
-                # Brightness: add offset
+
+                # Create brightness matrix (same size and type)
                 if settings.brightness != 0:
-                    brightness_mat = cv2.cuda_GpuMat(gpu_float.size(), gpu_float.type())
-                    brightness_mat.upload(np.full(gpu_float.size(), settings.brightness/255.0, dtype=np.float32))
+                    brightness_array = np.full((gpu_float.size()[1], gpu_float.size()[0], 3), 
+                                            settings.brightness/255.0, dtype=np.float32)
+                    brightness_mat = cv2.cuda_GpuMat()
+                    brightness_mat.upload(brightness_array)
+                    logger.debug(f"brightness_mat size={brightness_mat.size()}, type={brightness_mat.type()}")
                     gpu_float = cv2.cuda.add(gpu_float, brightness_mat)
 
             # Clip values to [0, 1]
-            zero_mat = cv2.cuda_GpuMat(gpu_float.size(), gpu_float.type())
-            zero_mat.upload(np.zeros(gpu_float.size(), dtype=np.float32))
-            one_mat = cv2.cuda_GpuMat(gpu_float.size(), gpu_float.type())
-            one_mat.upload(np.ones(gpu_float.size(), dtype=np.float32))
+            zero_array = np.zeros((gpu_float.size()[1], gpu_float.size()[0], 3), dtype=np.float32)
+            zero_mat = cv2.cuda_GpuMat()
+            zero_mat.upload(zero_array)
+            logger.debug(f"zero_mat size={zero_mat.size()}, type={zero_mat.type()}")
+
+            one_array = np.ones((gpu_float.size()[1], gpu_float.size()[0], 3), dtype=np.float32)
+            one_mat = cv2.cuda_GpuMat()
+            one_mat.upload(one_array)
+            logger.debug(f"one_mat size={one_mat.size()}, type={one_mat.type()}")
+
             gpu_float = cv2.cuda.max(gpu_float, zero_mat)  # Clip to >= 0
             gpu_float = cv2.cuda.min(gpu_float, one_mat)   # Clip to <= 1
 
             # Convert back to uint8 (manual scaling to [0, 255])
-            result = (gpu_float.download() * 255.0).astype(np.uint8)  # Manual scaling on CPU
+            result = (gpu_float.download() * 255.0).astype(np.uint8)
 
             return result
 
