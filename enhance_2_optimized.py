@@ -3050,28 +3050,34 @@ class GPUImageProcessor:
             # Upload image to GPU memory
             gpu_img = cv2.cuda_GpuMat()
             gpu_img.upload(img)
-            
-            # Convert to float for processing
-            gpu_float = cv2.cuda.convertScaleAbs(gpu_img, alpha=1.0/255.0, beta=0.0)
-            
-            # GPU Gamma correction
+
+            # Convert to float for processing (scale to [0, 1])
+            gpu_float = cv2.cuda_GpuMat()
+            cv2.cuda.convertScale(gpu_img, gpu_float, alpha=1.0/255.0)
+
+            # Apply gamma correction
             if abs(settings.gamma - 1.0) > 0.001:
                 gpu_float = cv2.cuda.pow(gpu_float, 1.0/settings.gamma)
-            
-            # GPU Brightness/Contrast
+
+            # Apply brightness and contrast
             if settings.brightness != 0 or settings.contrast != 1.0:
-                gpu_float = cv2.cuda.convertScaleAbs(gpu_float, 
-                                                   alpha=settings.contrast, 
-                                                   beta=settings.brightness/255.0)
-            
-            # Convert back to uint8
-            gpu_result = cv2.cuda.convertScaleAbs(gpu_float, alpha=255.0, beta=0.0)
-            
+                gpu_float = cv2.cuda.multiply(gpu_float, cv2.cuda_GpuMat(gpu_float.size(), gpu_float.type(), settings.contrast))
+                if settings.brightness != 0:
+                    brightness_mat = cv2.cuda_GpuMat(gpu_float.size(), gpu_float.type(), settings.brightness/255.0)
+                    gpu_float = cv2.cuda.add(gpu_float, brightness_mat)
+
+            # Clip values to [0, 1]
+            gpu_float = cv2.cuda.max(gpu_float, 0.0)
+            gpu_float = cv2.cuda.min(gpu_float, 1.0)
+
+            # Convert back to uint8 (scale to [0, 255])
+            gpu_result = cv2.cuda_GpuMat()
+            cv2.cuda.convertScale(gpu_float, gpu_result, alpha=255.0)
+
             # Download result from GPU
             result = gpu_result.download()
-            
-            return result
-        
+            return result.astype(np.uint8)
+
         except Exception as e:
             logger.warning(f"CUDA processing error: {e}")
             return self._enhance_cpu_fallback(img, settings)
