@@ -3053,7 +3053,7 @@ class GPUImageProcessor:
 
             # Convert to float for processing (manual scaling to [0, 1])
             gpu_float = cv2.cuda_GpuMat()
-            gpu_float.upload(img.astype(np.float32) / 255.0)  # Manual scaling on CPU before upload
+            gpu_float.upload(img.astype(np.float32) / 255.0)  # Manual scaling on CPU
 
             # Apply gamma correction
             if abs(settings.gamma - 1.0) > 0.001:
@@ -3062,27 +3062,33 @@ class GPUImageProcessor:
             # Apply brightness and contrast
             if settings.brightness != 0 or settings.contrast != 1.0:
                 # Contrast: multiply by contrast factor
-                gpu_float = cv2.cuda.multiply(gpu_float, cv2.cuda_GpuMat(gpu_float.size(), gpu_float.type(), settings.contrast))
+                contrast_mat = cv2.cuda_GpuMat(gpu_float.size(), gpu_float.type())
+                contrast_mat.upload(np.full(gpu_float.size(), settings.contrast, dtype=np.float32))
+                gpu_float = cv2.cuda.multiply(gpu_float, contrast_mat)
                 # Brightness: add offset
                 if settings.brightness != 0:
-                    brightness_mat = cv2.cuda_GpuMat(gpu_float.size(), gpu_float.type(), settings.brightness/255.0)
+                    brightness_mat = cv2.cuda_GpuMat(gpu_float.size(), gpu_float.type())
+                    brightness_mat.upload(np.full(gpu_float.size(), settings.brightness/255.0, dtype=np.float32))
                     gpu_float = cv2.cuda.add(gpu_float, brightness_mat)
 
             # Clip values to [0, 1]
-            gpu_float = cv2.cuda.max(gpu_float, 0.0)
-            gpu_float = cv2.cuda.min(gpu_float, 1.0)
+            zero_mat = cv2.cuda_GpuMat(gpu_float.size(), gpu_float.type())
+            zero_mat.upload(np.zeros(gpu_float.size(), dtype=np.float32))
+            one_mat = cv2.cuda_GpuMat(gpu_float.size(), gpu_float.type())
+            one_mat.upload(np.ones(gpu_float.size(), dtype=np.float32))
+            gpu_float = cv2.cuda.max(gpu_float, zero_mat)  # Clip to >= 0
+            gpu_float = cv2.cuda.min(gpu_float, one_mat)   # Clip to <= 1
 
             # Convert back to uint8 (manual scaling to [0, 255])
-            gpu_result = cv2.cuda_GpuMat()
-            gpu_result.upload((gpu_float.download() * 255.0).astype(np.uint8))  # Manual scaling on CPU after download
+            result = (gpu_float.download() * 255.0).astype(np.uint8)  # Manual scaling on CPU
 
-            # Download result from GPU
-            result = gpu_result.download()
-            return result.astype(np.uint8)
+            return result
 
         except Exception as e:
             logger.error(f"CUDA processing failed: {str(e)}")
-            logger.debug(f"CUDA function availability: pow={hasattr(cv2.cuda, 'pow')}, multiply={hasattr(cv2.cuda, 'multiply')}, add={hasattr(cv2.cuda, 'add')}, max={hasattr(cv2.cuda, 'max')}, min={hasattr(cv2.cuda, 'min')}")
+            logger.debug(f"CUDA function availability: pow={hasattr(cv2.cuda, 'pow')}, "
+                         f"multiply={hasattr(cv2.cuda, 'multiply')}, add={hasattr(cv2.cuda, 'add')}, "
+                         f"max={hasattr(cv2.cuda, 'max')}, min={hasattr(cv2.cuda, 'min')}")
             return self._enhance_cpu_fallback(img, settings)
     
     def _enhance_opencl(self, img: np.ndarray, settings) -> np.ndarray:
