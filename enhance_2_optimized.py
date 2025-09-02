@@ -3051,9 +3051,9 @@ class GPUImageProcessor:
             gpu_img = cv2.cuda_GpuMat()
             gpu_img.upload(img)
 
-            # Convert to float for processing (scale to [0, 1])
+            # Convert to float for processing (manual scaling to [0, 1])
             gpu_float = cv2.cuda_GpuMat()
-            cv2.cuda.convertScale(gpu_img, gpu_float, alpha=1.0/255.0)
+            gpu_float.upload(img.astype(np.float32) / 255.0)  # Manual scaling on CPU before upload
 
             # Apply gamma correction
             if abs(settings.gamma - 1.0) > 0.001:
@@ -3061,7 +3061,9 @@ class GPUImageProcessor:
 
             # Apply brightness and contrast
             if settings.brightness != 0 or settings.contrast != 1.0:
+                # Contrast: multiply by contrast factor
                 gpu_float = cv2.cuda.multiply(gpu_float, cv2.cuda_GpuMat(gpu_float.size(), gpu_float.type(), settings.contrast))
+                # Brightness: add offset
                 if settings.brightness != 0:
                     brightness_mat = cv2.cuda_GpuMat(gpu_float.size(), gpu_float.type(), settings.brightness/255.0)
                     gpu_float = cv2.cuda.add(gpu_float, brightness_mat)
@@ -3070,16 +3072,17 @@ class GPUImageProcessor:
             gpu_float = cv2.cuda.max(gpu_float, 0.0)
             gpu_float = cv2.cuda.min(gpu_float, 1.0)
 
-            # Convert back to uint8 (scale to [0, 255])
+            # Convert back to uint8 (manual scaling to [0, 255])
             gpu_result = cv2.cuda_GpuMat()
-            cv2.cuda.convertScale(gpu_float, gpu_result, alpha=255.0)
+            gpu_result.upload((gpu_float.download() * 255.0).astype(np.uint8))  # Manual scaling on CPU after download
 
             # Download result from GPU
             result = gpu_result.download()
             return result.astype(np.uint8)
 
         except Exception as e:
-            logger.warning(f"CUDA processing error: {e}")
+            logger.error(f"CUDA processing failed: {str(e)}")
+            logger.debug(f"CUDA function availability: pow={hasattr(cv2.cuda, 'pow')}, multiply={hasattr(cv2.cuda, 'multiply')}, add={hasattr(cv2.cuda, 'add')}, max={hasattr(cv2.cuda, 'max')}, min={hasattr(cv2.cuda, 'min')}")
             return self._enhance_cpu_fallback(img, settings)
     
     def _enhance_opencl(self, img: np.ndarray, settings) -> np.ndarray:
