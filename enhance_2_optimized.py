@@ -2936,6 +2936,13 @@ Add this to your existing code for GPU/iGPU acceleration
 import cv2
 import numpy as np
 import logging
+import warnings
+
+# Suppress matplotlib font warnings for emojis
+warnings.filterwarnings('ignore', message='.*missing from font.*')
+warnings.filterwarnings('ignore', message='.*Glyph.*missing from font.*')
+# warnings.filterwarnings('ignore', category=UserWarning, module='matplotlib')
+# warnings.filterwarnings('ignore', category=FutureWarning, module='matplotlib')
 
 logger = logging.getLogger(__name__)
 
