@@ -1,1 +1,566 @@
 
+#!/usr/bin/env python3
+"""
+MTG Proxy Enhancer - Selective Area Enhancement
+Add manual area selection and region-specific enhancement
+"""
+
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.widgets import RectangleSelector, Button as MPLButton
+from matplotlib.patches import Rectangle, Circle
+import matplotlib.patches as patches
+from ipywidgets import *
+from IPython.display import display, clear_output
+import logging
+
+logger = logging.getLogger(__name__)
+
+class SelectionTool:
+    """Handle different selection methods"""
+    
+    def __init__(self, image):
+        self.image = image
+        self.height, self.width = image.shape[:2]
+        self.selections = {}  # Store multiple named selections
+        self.current_selection = None
+        self.selection_mode = 'rectangle'
+        
+    def create_empty_mask(self):
+        """Create empty selection mask"""
+        return np.zeros((self.height, self.width), dtype=np.uint8)
+    
+    def rectangle_selection(self, x1, y1, x2, y2):
+        """Create rectangular selection mask"""
+        mask = self.create_empty_mask()
+        x1, x2 = int(min(x1, x2)), int(max(x1, x2))
+        y1, y2 = int(min(y1, y2)), int(max(y1, y2))
+        
+        # Ensure coordinates are within image bounds
+        x1 = max(0, min(x1, self.width-1))
+        x2 = max(0, min(x2, self.width-1))
+        y1 = max(0, min(y1, self.height-1))
+        y2 = max(0, min(y2, self.height-1))
+        
+        mask[y1:y2, x1:x2] = 255
+        return mask
+    
+    def circle_selection(self, center_x, center_y, radius):
+        """Create circular selection mask"""
+        mask = self.create_empty_mask()
+        center_x, center_y = int(center_x), int(center_y)
+        radius = int(radius)
+        
+        # Create circular mask
+        y, x = np.ogrid[:self.height, :self.width]
+        circle_mask = (x - center_x)**2 + (y - center_y)**2 <= radius**2
+        mask[circle_mask] = 255
+        
+        return mask
+    
+    def magic_wand_selection(self, x, y, tolerance=30):
+        """Magic wand selection based on color similarity"""
+        mask = self.create_empty_mask()
+        x, y = int(x), int(y)
+        
+        if x < 0 or x >= self.width or y < 0 or y >= self.height:
+            return mask
+        
+        # Get seed color
+        seed_color = self.image[y, x].astype(np.float32)
+        
+        # Create mask based on color similarity
+        img_float = self.image.astype(np.float32)
+        diff = np.sqrt(np.sum((img_float - seed_color)**2, axis=2))
+        mask[diff <= tolerance] = 255
+        
+        return mask
+    
+    def add_selection(self, name, mask):
+        """Add named selection"""
+        self.selections[name] = mask.copy()
+    
+    def get_selection(self, name):
+        """Get named selection"""
+        return self.selections.get(name, self.create_empty_mask())
+    
+    def combine_selections(self, names, operation='union'):
+        """Combine multiple selections"""
+        if not names:
+            return self.create_empty_mask()
+        
+        result = self.get_selection(names[0]).copy()
+        
+        for name in names[1:]:
+            mask = self.get_selection(name)
+            if operation == 'union':
+                result = cv2.bitwise_or(result, mask)
+            elif operation == 'intersection':
+                result = cv2.bitwise_and(result, mask)
+            elif operation == 'difference':
+                result = cv2.bitwise_and(result, cv2.bitwise_not(mask))
+        
+        return result
+
+class SelectiveEnhancer:
+    """Apply different enhancements to selected areas"""
+    
+    def __init__(self, image):
+        self.original_image = image.copy()
+        self.working_image = image.copy()
+        
+    def enhance_selection(self, mask, settings):
+        """Apply enhancement only to masked area"""
+        if np.sum(mask) == 0:  # Empty mask
+            return self.working_image
+        
+        # Create 3-channel mask
+        mask_3d = np.stack([mask, mask, mask], axis=2) / 255.0
+        
+        # Apply enhancement to entire image
+        enhanced_full = self.apply_enhancement_settings(self.original_image, settings)
+        
+        # Blend enhanced and original based on mask
+        result = self.original_image.astype(np.float32) * (1 - mask_3d) + \
+                enhanced_full.astype(np.float32) * mask_3d
+        
+        return result.astype(np.uint8)
+    
+    def apply_enhancement_settings(self, image, settings):
+        """Apply enhancement settings to image"""
+        enhanced = image.copy().astype(np.float32) / 255.0
+        
+        # Gamma correction
+        if abs(settings.get('gamma', 1.0) - 1.0) > 0.001:
+            enhanced = np.power(enhanced, 1.0 / settings['gamma'])
+        
+        # Brightness and contrast
+        enhanced = enhanced * settings.get('contrast', 1.0) + settings.get('brightness', 0) / 255.0
+        
+        # Convert back to uint8
+        enhanced = np.clip(enhanced * 255.0, 0, 255).astype(np.uint8)
+        
+        # CLAHE
+        clip_limit = settings.get('clahe', 0)
+        if clip_limit > 0:
+            lab = cv2.cvtColor(enhanced, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
+            l = clahe.apply(l)
+            enhanced = cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
+        
+        # Saturation
+        saturation = settings.get('saturation', 1.0)
+        if abs(saturation - 1.0) > 0.001:
+            hsv = cv2.cvtColor(enhanced, cv2.COLOR_BGR2HSV).astype(np.float32)
+            hsv[:, :, 1] *= saturation
+            hsv[:, :, 1] = np.clip(hsv[:, :, 1], 0, 255)
+            enhanced = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+        
+        return enhanced
+    
+    def apply_multiple_selections(self, selection_settings):
+        """Apply different settings to multiple selections"""
+        result = self.original_image.copy()
+        
+        for selection_name, settings in selection_settings.items():
+            mask = settings.get('mask')
+            if mask is not None and np.sum(mask) > 0:
+                # Apply enhancement to this selection
+                enhanced = self.enhance_selection(mask, settings)
+                # Update result (each selection overwrites previous in that area)
+                mask_3d = np.stack([mask, mask, mask], axis=2) / 255.0
+                result = result.astype(np.float32) * (1 - mask_3d) + \
+                        enhanced.astype(np.float32) * mask_3d
+        
+        return result.astype(np.uint8)
+
+class SelectiveEnhancementInterface:
+    """Interactive interface for selective enhancement"""
+    
+    def __init__(self, enhancer_instance):
+        self.enhancer = enhancer_instance
+        self.current_image_idx = 0
+        self.selection_tool = None
+        self.selective_enhancer = None
+        self.current_selections = {}
+        
+        # Selection state
+        self.selection_mode = 'rectangle'
+        self.current_selection_name = 'art_area'
+        
+    def load_current_image(self):
+        """Load current image for selection"""
+        if not self.enhancer.images:
+            return None
+        
+        filename = self.enhancer.images[self.current_image_idx]
+        img_path = self.enhancer.input_folder / filename
+        img = cv2.imread(str(img_path))
+        
+        if img is not None:
+            self.selection_tool = SelectionTool(img)
+            self.selective_enhancer = SelectiveEnhancer(img)
+        
+        return img
+    
+    def create_selection_interface(self):
+        """Create the selective enhancement interface"""
+        img = self.load_current_image()
+        if img is None:
+            return HTML("<h3>❌ No images found</h3>")
+        
+        # Navigation controls
+        prev_btn = Button(description="◀ Previous", button_style='info')
+        next_btn = Button(description="Next ▶", button_style='info')
+        img_info = HTML(f"<b>Image {self.current_image_idx + 1}/{len(self.enhancer.images)}</b>")
+        
+        # Selection controls
+        selection_mode = Dropdown(
+            options=['rectangle', 'circle', 'magic_wand'],
+            value='rectangle',
+            description='Selection:',
+            style={'description_width': '100px'}
+        )
+        
+        selection_name = Dropdown(
+            options=['art_area', 'text_area', 'border_area', 'custom_1', 'custom_2'],
+            value='art_area',
+            description='Area Name:',
+            style={'description_width': '100px'}
+        )
+        
+        # Selection buttons
+        select_btn = Button(description="🎯 Make Selection", button_style='primary')
+        clear_btn = Button(description="🗑️ Clear Selection", button_style='warning')
+        auto_detect_btn = Button(description="🤖 Auto Detect", button_style='info')
+        
+        # Enhancement settings for selected area
+        area_settings = {
+            'gamma': FloatSlider(value=1.0, min=0.5, max=3.0, step=0.05, description="Gamma"),
+            'brightness': FloatSlider(value=0, min=-50, max=50, step=1, description="Brightness"),
+            'contrast': FloatSlider(value=1.0, min=0.5, max=2.5, step=0.05, description="Contrast"),
+            'clahe': FloatSlider(value=2.0, min=0, max=8, step=0.1, description="CLAHE"),
+            'saturation': FloatSlider(value=1.0, min=0, max=3, step=0.05, description="Saturation")
+        }
+        
+        # Processing buttons
+        preview_btn = Button(description="👁️ Preview", button_style='success')
+        apply_btn = Button(description="✅ Apply Enhancement", button_style='success')
+        save_btn = Button(description="💾 Save Result", button_style='primary')
+        
+        # Output areas
+        selection_output = Output()
+        preview_output = Output()
+        
+        # Event handlers
+        def on_navigation(direction):
+            if direction == "prev":
+                self.current_image_idx = max(0, self.current_image_idx - 1)
+            else:
+                self.current_image_idx = min(len(self.enhancer.images) - 1, self.current_image_idx + 1)
+            
+            img_info.value = f"<b>Image {self.current_image_idx + 1}/{len(self.enhancer.images)}</b>"
+            self.load_current_image()
+            update_selection_display()
+        
+        def on_make_selection(b):
+            with selection_output:
+                clear_output()
+                self.show_selection_interface(selection_mode.value, selection_name.value)
+        
+        def on_clear_selection(b):
+            name = selection_name.value
+            if name in self.current_selections:
+                del self.current_selections[name]
+            update_selection_display()
+        
+        def on_auto_detect(b):
+            with selection_output:
+                clear_output()
+                print("🤖 Auto-detecting card regions...")
+                self.auto_detect_regions()
+                update_selection_display()
+        
+        def on_preview(b):
+            with preview_output:
+                clear_output()
+                self.show_enhancement_preview(area_settings, selection_name.value)
+        
+        def on_apply(b):
+            with preview_output:
+                clear_output()
+                print("✅ Applying selective enhancement...")
+                self.apply_selective_enhancement(area_settings)
+        
+        def on_save(b):
+            with preview_output:
+                clear_output()
+                print("💾 Saving enhanced image...")
+                self.save_enhanced_image()
+        
+        def update_selection_display():
+            with selection_output:
+                clear_output()
+                self.show_current_selections()
+        
+        # Connect event handlers
+        prev_btn.on_click(lambda b: on_navigation("prev"))
+        next_btn.on_click(lambda b: on_navigation("next"))
+        select_btn.on_click(on_make_selection)
+        clear_btn.on_click(on_clear_selection)
+        auto_detect_btn.on_click(on_auto_detect)
+        preview_btn.on_click(on_preview)
+        apply_btn.on_click(on_apply)
+        save_btn.on_click(on_save)
+        
+        # Layout
+        header = VBox([
+            HTML("<h2>🎯 Selective Enhancement Tool</h2>"),
+            HBox([prev_btn, next_btn, img_info])
+        ])
+        
+        selection_controls = VBox([
+            HTML("<h3>🖱️ Selection Tools</h3>"),
+            HBox([selection_mode, selection_name]),
+            HBox([select_btn, clear_btn, auto_detect_btn]),
+            selection_output
+        ])
+        
+        enhancement_controls = VBox([
+            HTML(f"<h3>⚙️ Enhancement Settings for <span style='color: blue;'>{selection_name.value}</span></h3>"),
+            HBox([area_settings['gamma'], area_settings['brightness']]),
+            HBox([area_settings['contrast'], area_settings['clahe']]),
+            area_settings['saturation']
+        ])
+        
+        action_controls = VBox([
+            HTML("<h3>🚀 Actions</h3>"),
+            HBox([preview_btn, apply_btn, save_btn]),
+            preview_output
+        ])
+        
+        interface = VBox([
+            header,
+            selection_controls,
+            enhancement_controls,
+            action_controls
+        ])
+        
+        # Initial display
+        update_selection_display()
+        
+        return interface
+    
+    def show_selection_interface(self, mode, name):
+        """Show interactive selection interface"""
+        img = cv2.cvtColor(self.selection_tool.image, cv2.COLOR_BGR2RGB)
+        
+        fig, ax = plt.subplots(figsize=(12, 8))
+        ax.imshow(img)
+        ax.set_title(f"Click and drag to select {name} ({mode} mode)")
+        ax.axis('off')
+        
+        if mode == 'rectangle':
+            selector = RectangleSelector(ax, self.on_rectangle_select,
+                                       useblit=True, button=[1],
+                                       minspanx=5, minspany=5,
+                                       spancoords='pixels',
+                                       interactive=True)
+            self.current_selector = selector
+        
+        self.current_selection_name = name
+        plt.show()
+    
+    def on_rectangle_select(self, eclick, erelease):
+        """Handle rectangle selection"""
+        x1, y1 = int(eclick.xdata), int(eclick.ydata)
+        x2, y2 = int(erelease.xdata), int(erelease.ydata)
+        
+        mask = self.selection_tool.rectangle_selection(x1, y1, x2, y2)
+        self.selection_tool.add_selection(self.current_selection_name, mask)
+        self.current_selections[self.current_selection_name] = mask
+        
+        print(f"✅ Selected {self.current_selection_name}: ({x1}, {y1}) to ({x2}, {y2})")
+    
+    def auto_detect_regions(self):
+        """Auto-detect common MTG card regions"""
+        img = self.selection_tool.image
+        
+        # Simple auto-detection based on image analysis
+        # Art area (usually upper center, colorful)
+        h, w = img.shape[:2]
+        art_mask = self.selection_tool.rectangle_selection(
+            w * 0.1, h * 0.1, w * 0.9, h * 0.55
+        )
+        self.selection_tool.add_selection('art_area', art_mask)
+        self.current_selections['art_area'] = art_mask
+        
+        # Text area (lower portion)
+        text_mask = self.selection_tool.rectangle_selection(
+            w * 0.1, h * 0.6, w * 0.9, h * 0.85
+        )
+        self.selection_tool.add_selection('text_area', text_mask)
+        self.current_selections['text_area'] = text_mask
+        
+        print("✅ Auto-detected art_area and text_area regions")
+    
+    def show_current_selections(self):
+        """Display current selections"""
+        if not self.current_selections:
+            print("No selections made yet. Use selection tools above.")
+            return
+        
+        img = cv2.cvtColor(self.selection_tool.image, cv2.COLOR_BGR2RGB)
+        
+        fig, ax = plt.subplots(figsize=(10, 8))
+        ax.imshow(img)
+        
+        # Overlay selections with different colors
+        colors = ['red', 'blue', 'green', 'yellow', 'cyan']
+        for i, (name, mask) in enumerate(self.current_selections.items()):
+            color = colors[i % len(colors)]
+            
+            # Create colored overlay
+            colored_mask = np.zeros_like(img)
+            if len(colors) > i:
+                if color == 'red':
+                    colored_mask[:, :, 0] = mask
+                elif color == 'blue':
+                    colored_mask[:, :, 2] = mask
+                elif color == 'green':
+                    colored_mask[:, :, 1] = mask
+            
+            # Blend overlay
+            alpha = 0.3
+            overlay = img * (1 - alpha) + colored_mask * alpha
+            img = np.where(mask[..., None] > 0, overlay, img).astype(np.uint8)
+        
+        ax.imshow(img)
+        ax.set_title("Current Selections")
+        ax.axis('off')
+        
+        # Legend
+        legend_text = "\n".join([f"{colors[i % len(colors)]}: {name}" 
+                               for i, name in enumerate(self.current_selections.keys())])
+        ax.text(0.02, 0.98, legend_text, transform=ax.transAxes,
+                verticalalignment='top', bbox=dict(boxstyle="round", facecolor='white', alpha=0.8))
+        
+        plt.show()
+    
+    def show_enhancement_preview(self, settings_widgets, area_name):
+        """Show preview of selective enhancement"""
+        if area_name not in self.current_selections:
+            print(f"❌ No selection made for {area_name}")
+            return
+        
+        # Get settings from widgets
+        settings = {name: widget.value for name, widget in settings_widgets.items()}
+        settings['mask'] = self.current_selections[area_name]
+        
+        # Apply selective enhancement
+        enhanced = self.selective_enhancer.enhance_selection(
+            self.current_selections[area_name], settings
+        )
+        
+        # Show comparison
+        original = cv2.cvtColor(self.selection_tool.image, cv2.COLOR_BGR2RGB)
+        enhanced_rgb = cv2.cvtColor(enhanced, cv2.COLOR_BGR2RGB)
+        
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
+        
+        ax1.imshow(original)
+        ax1.set_title("Original")
+        ax1.axis('off')
+        
+        ax2.imshow(enhanced_rgb)
+        ax2.set_title(f"Enhanced ({area_name})")
+        ax2.axis('off')
+        
+        plt.tight_layout()
+        plt.show()
+    
+    def apply_selective_enhancement(self, settings_widgets):
+        """Apply enhancement to all selected areas"""
+        if not self.current_selections:
+            print("❌ No selections made")
+            return
+        
+        # Prepare settings for all selections
+        selection_settings = {}
+        for name, mask in self.current_selections.items():
+            settings = {key: widget.value for key, widget in settings_widgets.items()}
+            settings['mask'] = mask
+            selection_settings[name] = settings
+        
+        # Apply enhancements
+        self.enhanced_result = self.selective_enhancer.apply_multiple_selections(selection_settings)
+        
+        # Show result
+        result_rgb = cv2.cvtColor(self.enhanced_result, cv2.COLOR_BGR2RGB)
+        original_rgb = cv2.cvtColor(self.selection_tool.image, cv2.COLOR_BGR2RGB)
+        
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
+        
+        ax1.imshow(original_rgb)
+        ax1.set_title("Original")
+        ax1.axis('off')
+        
+        ax2.imshow(result_rgb)
+        ax2.set_title("Selectively Enhanced")
+        ax2.axis('off')
+        
+        plt.tight_layout()
+        plt.show()
+        
+        print("✅ Selective enhancement applied!")
+    
+    def save_enhanced_image(self):
+        """Save the enhanced image"""
+        if not hasattr(self, 'enhanced_result'):
+            print("❌ No enhanced result to save. Apply enhancement first.")
+            return
+        
+        filename = self.enhancer.images[self.current_image_idx]
+        output_path = self.enhancer.output_folder / f"selective_{filename}"
+        
+        success = cv2.imwrite(str(output_path), self.enhanced_result)
+        
+        if success:
+            print(f"✅ Saved enhanced image: {output_path}")
+        else:
+            print("❌ Failed to save image")
+
+def create_selective_enhancement_interface(enhancer_instance):
+    """Create the selective enhancement interface"""
+    interface = SelectiveEnhancementInterface(enhancer_instance)
+    return interface.create_selection_interface()
+
+# Integration with main enhancer
+def add_selective_enhancement_tab(main_interface):
+    """Add selective enhancement as a new tab"""
+    selective_interface = create_selective_enhancement_interface(main_interface.enhancer)
+    
+    # This would be integrated into the existing tabbed interface
+    return selective_interface
+
+# Usage example
+def demo_selective_enhancement():
+    """Demo the selective enhancement features"""
+    print("🎯 MTG Selective Enhancement Demo")
+    print("=" * 40)
+    
+    # Create enhancer
+    enhancer = create_mtg_enhancer_optimized()
+    
+    if not enhancer.images:
+        print("❌ No images found for demo")
+        return
+    
+    # Create selective interface
+    interface = create_selective_enhancement_interface(enhancer)
+    display(interface)
+
+if __name__ == "__main__":
+    demo_selective_enhancement()
