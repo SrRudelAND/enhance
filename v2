@@ -91,10 +91,10 @@ class PresetManager:
         # Normal cards preset
         presets["normal"] = CardPreset(
             name="normal",
-            art_area=AreaDefinition(0.08, 0.12, 0.84, 0.43, "art_area"),
-            text_area=AreaDefinition(0.08, 0.58, 0.84, 0.27, "text_area"),
-            border_area=AreaDefinition(0.02, 0.02, 0.96, 0.96, "border_area"),
-            name_area=AreaDefinition(0.08, 0.02, 0.70, 0.08, "name_area")
+            art_area=AreaDefinition(0.11, 0.13, 0.78, 0.43, "art_area"),
+            text_area=AreaDefinition(0.11, 0.56, 0.78, 0.36, "text_area"),
+            border_area=AreaDefinition(0.08, 0.06, 0.84, 0.86, "border_area"),
+            name_area=AreaDefinition(0.10, 0.08, 0.80, 0.10, "name_area")
         )
         
         # Art cards preset (larger art area)
