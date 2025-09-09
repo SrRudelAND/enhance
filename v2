@@ -7,16 +7,16 @@ Basic imports, configurations, and data structures
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-#from ipywidgets import *
-#from IPython.display import display, clear_output
+from ipywidgets import *
+from IPython.display import display, clear_output
 import logging
 import os
 import yaml
 import json
-#from pathlib import Path
-#from typing import Dict, List, Tuple, Optional
-#from dataclasses import dataclass, field
-#from enum import Enum
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional
+from dataclasses import dataclass, field
+from enum import Enum
 import time
 import warnings
 
