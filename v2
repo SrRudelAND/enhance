@@ -1,0 +1,1561 @@
+#!/usr/bin/env python3
+"""
+MTG Proxy Enhancer - Core Module Part 1
+Basic imports, configurations, and data structures
+"""
+
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+#from ipywidgets import *
+#from IPython.display import display, clear_output
+import logging
+import os
+import yaml
+import json
+#from pathlib import Path
+#from typing import Dict, List, Tuple, Optional
+#from dataclasses import dataclass, field
+#from enum import Enum
+import time
+import warnings
+
+# Suppress matplotlib font warnings
+warnings.filterwarnings('ignore', message='.*missing from font.*')
+warnings.filterwarnings('ignore', message='.*Glyph.*missing from font.*')
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+@dataclass
+class EnhancementSettings:
+    """Data class for enhancement parameters"""
+    gamma: float = 1.0
+    brightness: float = 0.0
+    contrast: float = 1.0
+    clahe: float = 2.0
+    saturation: float = 1.0
+    preserve_black: bool = True
+    black_threshold: int = 15
+
+@dataclass
+class AppConfig:
+    """Application configuration"""
+    input_folder: str = "mtgproxy/Input"
+    output_folder: str = "mtgproxy/Output"
+    max_workers: int = 4
+    cache_size: int = 50
+    default_quality: int = 95
+    log_level: str = "INFO"
+    auto_create_folders: bool = True
+
+@dataclass
+class ImageStats:
+    """Image analysis statistics"""
+    mean_brightness: float
+    contrast_std: float
+    color_balance: List[float]
+    saturation_mean: float
+    is_dark: bool
+    is_bright: bool
+    is_low_contrast: bool
+
+@dataclass
+class AreaDefinition:
+    """Definition of a card area with position and size"""
+    left: float  # 0.0 to 1.0 (percentage from left edge)
+    top: float   # 0.0 to 1.0 (percentage from top edge)
+    width: float # 0.0 to 1.0 (percentage of total width)
+    height: float # 0.0 to 1.0 (percentage of total height)
+    name: str = ""
+
+@dataclass
+class CardPreset:
+    """Complete preset definition for a card type"""
+    name: str
+    art_area: AreaDefinition
+    text_area: AreaDefinition
+    border_area: AreaDefinition
+    name_area: AreaDefinition
+
+class PresetManager:
+    """Manage card presets for different MTG card types"""
+    
+    @staticmethod
+    def create_default_presets() -> Dict[str, CardPreset]:
+        """Create default presets for different card types"""
+        
+        presets = {}
+        
+        # Normal cards preset
+        presets["normal"] = CardPreset(
+            name="normal",
+            art_area=AreaDefinition(0.08, 0.12, 0.84, 0.43, "art_area"),
+            text_area=AreaDefinition(0.08, 0.58, 0.84, 0.27, "text_area"),
+            border_area=AreaDefinition(0.02, 0.02, 0.96, 0.96, "border_area"),
+            name_area=AreaDefinition(0.08, 0.02, 0.70, 0.08, "name_area")
+        )
+        
+        # Art cards preset (larger art area)
+        presets["art"] = CardPreset(
+            name="art",
+            art_area=AreaDefinition(0.08, 0.12, 0.84, 0.50, "art_area"),
+            text_area=AreaDefinition(0.08, 0.65, 0.84, 0.20, "text_area"),
+            border_area=AreaDefinition(0.02, 0.02, 0.96, 0.96, "border_area"),
+            name_area=AreaDefinition(0.08, 0.02, 0.70, 0.08, "name_area")
+        )
+        
+        # Full art cards preset (art covers most of card)
+        presets["full art"] = CardPreset(
+            name="full art",
+            art_area=AreaDefinition(0.05, 0.05, 0.90, 0.75, "art_area"),
+            text_area=AreaDefinition(0.08, 0.82, 0.84, 0.15, "text_area"),
+            border_area=AreaDefinition(0.02, 0.02, 0.96, 0.96, "border_area"),
+            name_area=AreaDefinition(0.08, 0.02, 0.70, 0.06, "name_area")
+        )
+        
+        # Planes1 preset - TODO: You will specify these coordinates
+        presets["planes1"] = CardPreset(
+            name="planes1",
+            art_area=AreaDefinition(0.08, 0.15, 0.84, 0.40, "art_area"),  # PLACEHOLDER
+            text_area=AreaDefinition(0.08, 0.60, 0.84, 0.25, "text_area"),  # PLACEHOLDER
+            border_area=AreaDefinition(0.02, 0.02, 0.96, 0.96, "border_area"),  # PLACEHOLDER
+            name_area=AreaDefinition(0.08, 0.02, 0.70, 0.08, "name_area")  # PLACEHOLDER
+        )
+        
+        # Planes2 preset - TODO: You will specify these coordinates
+        presets["planes2"] = CardPreset(
+            name="planes2", 
+            art_area=AreaDefinition(0.08, 0.15, 0.84, 0.40, "art_area"),  # PLACEHOLDER
+            text_area=AreaDefinition(0.08, 0.60, 0.84, 0.25, "text_area"),  # PLACEHOLDER
+            border_area=AreaDefinition(0.02, 0.02, 0.96, 0.96, "border_area"),  # PLACEHOLDER
+            name_area=AreaDefinition(0.08, 0.02, 0.70, 0.08, "name_area")  # PLACEHOLDER
+        )
+        
+        return presets
+    
+    @staticmethod
+    def save_presets(presets: Dict[str, CardPreset], filename: str = "card_presets.json"):
+        """Save presets to JSON file"""
+        try:
+            # Convert to serializable format
+            preset_data = {}
+            for name, preset in presets.items():
+                preset_data[name] = {
+                    "name": preset.name,
+                    "art_area": preset.art_area.__dict__,
+                    "text_area": preset.text_area.__dict__,
+                    "border_area": preset.border_area.__dict__,
+                    "name_area": preset.name_area.__dict__
+                }
+            
+            with open(filename, 'w') as f:
+                json.dump(preset_data, f, indent=2)
+            
+            logger.info(f"Presets saved to {filename}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to save presets: {e}")
+            return False
+    
+    @staticmethod
+    def load_presets(filename: str = "card_presets.json") -> Optional[Dict[str, CardPreset]]:
+        """Load presets from JSON file"""
+        try:
+            if not os.path.exists(filename):
+                return None
+                
+            with open(filename, 'r') as f:
+                preset_data = json.load(f)
+            
+            # Convert back to CardPreset objects
+            presets = {}
+            for name, data in preset_data.items():
+                presets[name] = CardPreset(
+                    name=data["name"],
+                    art_area=AreaDefinition(**data["art_area"]),
+                    text_area=AreaDefinition(**data["text_area"]),
+                    border_area=AreaDefinition(**data["border_area"]),
+                    name_area=AreaDefinition(**data["name_area"])
+                )
+            
+            logger.info(f"Presets loaded from {filename}")
+            return presets
+            
+        except Exception as e:
+            logger.error(f"Failed to load presets: {e}")
+            return None
+
+class SelectionTool:
+    """Handle area selections for MTG cards"""
+    
+    def __init__(self, image: np.ndarray):
+        self.image = image
+        self.height, self.width = image.shape[:2]
+        self.selections = {}  # Store multiple named selections
+        
+    def create_empty_mask(self) -> np.ndarray:
+        """Create empty selection mask"""
+        return np.zeros((self.height, self.width), dtype=np.uint8)
+    
+    def create_area_mask(self, area: AreaDefinition) -> np.ndarray:
+        """Create mask from area definition"""
+        mask = self.create_empty_mask()
+        
+        # Convert relative coordinates to pixels
+        x1 = int(area.left * self.width)
+        y1 = int(area.top * self.height)
+        x2 = int((area.left + area.width) * self.width)
+        y2 = int((area.top + area.height) * self.height)
+        
+        # Ensure coordinates are within bounds
+        x1 = max(0, min(x1, self.width - 1))
+        x2 = max(0, min(x2, self.width))
+        y1 = max(0, min(y1, self.height - 1))
+        y2 = max(0, min(y2, self.height))
+        
+        if x2 > x1 and y2 > y1:
+            mask[y1:y2, x1:x2] = 255
+            
+        return mask
+    
+    def apply_preset(self, preset: CardPreset):
+        """Apply a complete preset to selections"""
+        self.selections = {}
+        
+        # Create masks for all areas in the preset
+        self.selections["art_area"] = self.create_area_mask(preset.art_area)
+        self.selections["text_area"] = self.create_area_mask(preset.text_area)
+        self.selections["border_area"] = self.create_area_mask(preset.border_area)
+        self.selections["name_area"] = self.create_area_mask(preset.name_area)
+    
+    def get_selection(self, name: str) -> np.ndarray:
+        """Get named selection mask"""
+        return self.selections.get(name, self.create_empty_mask())
+    
+    def get_all_selections(self) -> Dict[str, np.ndarray]:
+        """Get all current selections"""
+        return self.selections.copy()
+    
+    def clear_selections(self):
+        """Clear all selections"""
+        self.selections = {}
+
+class SelectiveEnhancer:
+    """Apply different enhancements to selected areas"""
+    
+    def __init__(self, image: np.ndarray):
+        self.original_image = image.copy()
+        
+    def enhance_selection(self, mask: np.ndarray, settings: EnhancementSettings) -> np.ndarray:
+        """Apply enhancement only to masked area"""
+        if np.sum(mask) == 0:  # Empty mask
+            return self.original_image
+        
+        # Apply enhancement to entire image first
+        enhanced_full = self._apply_settings(self.original_image, settings)
+        
+        # Create 3-channel mask
+        mask_3d = np.stack([mask, mask, mask], axis=2) / 255.0
+        
+        # Blend enhanced and original based on mask
+        result = self.original_image.astype(np.float32) * (1 - mask_3d) + \
+                enhanced_full.astype(np.float32) * mask_3d
+        
+        return result.astype(np.uint8)
+    
+    def _apply_settings(self, image: np.ndarray, settings: EnhancementSettings) -> np.ndarray:
+        """Apply enhancement settings to entire image"""
+        result = image.copy().astype(np.float32)
+        
+        # Gamma correction
+        if abs(settings.gamma - 1.0) > 0.001:
+            result = result / 255.0
+            result = np.power(result, 1.0 / settings.gamma)
+            result = result * 255.0
+        
+        # Brightness and contrast
+        result = result * settings.contrast + settings.brightness
+        
+        # Clip values
+        result = np.clip(result, 0, 255)
+        
+        # Convert back to uint8 for OpenCV operations
+        result = result.astype(np.uint8)
+        
+        # CLAHE
+        if settings.clahe > 0:
+            lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=settings.clahe, tileGridSize=(8, 8))
+            l = clahe.apply(l)
+            result = cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
+        
+        # Saturation
+        if abs(settings.saturation - 1.0) > 0.001:
+            hsv = cv2.cvtColor(result, cv2.COLOR_BGR2HSV).astype(np.float32)
+            hsv[:, :, 1] *= settings.saturation
+            hsv[:, :, 1] = np.clip(hsv[:, :, 1], 0, 255)
+            result = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+        
+        # Preserve black pixels if enabled
+        if settings.preserve_black:
+            result = self._preserve_black_pixels(image, result, settings.black_threshold)
+        
+        return result
+    
+    def _preserve_black_pixels(self, original: np.ndarray, enhanced: np.ndarray, 
+                             threshold: int) -> np.ndarray:
+        """Preserve black pixels (card borders, text)"""
+        # Create mask for black pixels
+        black_mask = np.all(original <= threshold, axis=2, keepdims=True)
+        
+        # Keep original pixels where mask is True
+        return np.where(black_mask, original, enhanced)
+    
+    def apply_to_all_areas(self, selections: Dict[str, np.ndarray], 
+                          settings: EnhancementSettings) -> np.ndarray:
+        """Apply enhancement to all selected areas"""
+        result = self.original_image.copy()
+        
+        # Apply enhancement to each selection
+        for area_name, mask in selections.items():
+            if np.sum(mask) > 0:
+                enhanced_area = self.enhance_selection(mask, settings)
+                
+                # Blend this area into result
+                mask_3d = np.stack([mask, mask, mask], axis=2) / 255.0
+                result = result.astype(np.float32) * (1 - mask_3d) + \
+                        enhanced_area.astype(np.float32) * mask_3d
+                result = result.astype(np.uint8)
+        
+        return result
+
+class ConfigManager:
+    """Manage application configuration"""
+    
+    DEFAULT_CONFIG_FILE = "mtg_enhancer_config.yaml"
+    
+    @staticmethod
+    def load_config(config_file: str = None) -> AppConfig:
+        """Load configuration from file or create default"""
+        if config_file is None:
+            config_file = ConfigManager.DEFAULT_CONFIG_FILE
+        
+        config_path = Path(config_file)
+        
+        if config_path.exists():
+            try:
+                with open(config_path, 'r') as f:
+                    config_data = yaml.safe_load(f)
+                
+                return AppConfig(**config_data)
+                
+            except Exception as e:
+                logger.warning(f"Could not load config file: {e}. Using defaults.")
+                return AppConfig()
+        else:
+            # Create default config file
+            default_config = AppConfig()
+            ConfigManager.save_config(default_config, config_file)
+            return default_config
+    
+    @staticmethod
+    def save_config(config: AppConfig, config_file: str = None) -> bool:
+        """Save configuration to file"""
+        if config_file is None:
+            config_file = ConfigManager.DEFAULT_CONFIG_FILE
+        
+        try:
+            config_dict = config.__dict__
+            
+            with open(config_file, 'w') as f:
+                yaml.dump(config_dict, f, default_flow_style=False, indent=2)
+            
+            logger.info(f"Configuration saved to {config_file}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Could not save config: {e}")
+            return False
+
+class MTGProxyEnhancer:
+    """Main MTG Proxy Enhancer class"""
+    
+    SUPPORTED_FORMATS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif'}
+    
+    def __init__(self, input_folder: str = "mtgproxy/Input", 
+                 output_folder: str = "mtgproxy/Output"):
+        self.input_folder = Path(input_folder)
+        self.output_folder = Path(output_folder)
+        
+        self._setup_folders()
+        self.images = self._load_image_list()
+        
+    def _setup_folders(self) -> None:
+        """Create folders if they don't exist"""
+        self.input_folder.mkdir(parents=True, exist_ok=True)
+        self.output_folder.mkdir(parents=True, exist_ok=True)
+        
+    def _load_image_list(self) -> List[str]:
+        """Load list of supported image files"""
+        images = []
+        for ext in self.SUPPORTED_FORMATS:
+            # Handle both lowercase and uppercase extensions
+            images.extend([f.name for f in self.input_folder.glob(f"*{ext}")])
+            images.extend([f.name for f in self.input_folder.glob(f"*{ext.upper()}")])
+        
+        # Remove duplicates and sort
+        images = sorted(list(set(images)))
+        
+        logger.info(f"Found {len(images)} images in {self.input_folder}")
+        return images
+    
+    def load_image(self, index: int) -> Optional[np.ndarray]:
+        """Load image by index"""
+        if 0 <= index < len(self.images):
+            img_path = self.input_folder / self.images[index]
+            return cv2.imread(str(img_path))
+        return None
+    
+    def save_image(self, image: np.ndarray, filename: str, quality: int = 95) -> bool:
+        """Save enhanced image"""
+        try:
+            output_path = self.output_folder / filename
+            
+            # Determine save parameters based on file extension
+            ext = Path(filename).suffix.lower()
+            if ext in ['.jpg', '.jpeg']:
+                params = [cv2.IMWRITE_JPEG_QUALITY, quality]
+            elif ext == '.png':
+                params = [cv2.IMWRITE_PNG_COMPRESSION, 1]
+            else:
+                params = []
+            
+            success = cv2.imwrite(str(output_path), image, params)
+            
+            if success:
+                logger.info(f"Saved enhanced image: {output_path}")
+            else:
+                logger.error(f"Failed to save image: {output_path}")
+                
+            return success
+            
+        except Exception as e:
+            logger.error(f"Error saving image {filename}: {e}")
+            return False
+
+# Utility functions
+def create_mtg_enhancer_optimized(input_folder: str = "mtgproxy/Input",
+                                 output_folder: str = "mtgproxy/Output") -> MTGProxyEnhancer:
+    """Create optimized MTG Proxy Enhancer instance"""
+    try:
+        enhancer = MTGProxyEnhancer(input_folder, output_folder)
+        logger.info(f"Enhancer created successfully with {len(enhancer.images)} images")
+        return enhancer
+    except Exception as e:
+        logger.error(f"Failed to create enhancer: {e}")
+        raise
+
+def print_usage():
+    """Print usage instructions"""
+    print("""
+🃏 MTG Proxy Enhancer - Optimized Modular Version
+
+QUICK START:
+1. Place images in 'mtgproxy/Input' folder
+2. Choose enhancement method:
+
+📚 METHODS:
+• Selective Enhancement (Recommended):
+  enhancer = create_mtg_enhancer_optimized()
+  ui = create_selective_interface(enhancer)
+  display(ui)
+
+📋 AVAILABLE PRESETS:
+• "normal" - Standard MTG card layout
+• "art" - Art-focused cards with larger art area
+• "full art" - Full art cards layout
+• "planes1" - Planeswalker layout type 1
+• "planes2" - Planeswalker layout type 2
+
+⚡ FEATURES:
+• Multi-area selection with presets
+• Real-time preview
+• Live comparison
+• Modular architecture
+""")
+
+if __name__ == "__main__":
+    print("🃏 MTG Proxy Enhancer - Core Module Part 1 Loaded!")
+    print("\n📚 For complete usage guide, run: print_usage()")
+
+##############################################################################################################################################
+#!/usr/bin/env python3
+"""
+MTG Proxy Enhancer - Interface Module Part 1
+Selective area enhancement interface with organized layout
+"""
+
+# Import from Core Part 1
+#from mtg_core_part1 import (
+#    MTGProxyEnhancer, EnhancementSettings, PresetManager, 
+#    SelectionTool, SelectiveEnhancer, AreaDefinition, CardPreset
+#)
+
+class MTGSelectiveInterface:
+    """
+    Main interface for selective MTG card enhancement
+    Layout order: 1. Selective tool, 2. Selection display, 3. Sliders, 4. Comparison, 5. Buttons
+    """
+    
+    def __init__(self, enhancer: MTGProxyEnhancer):
+        self.enhancer = enhancer
+        self.current_image_idx = 0
+        self.selection_tool = None
+        self.selective_enhancer = None
+        self.current_preset = "normal"
+        self.enhanced_result = None
+        
+        # Load presets
+        self.presets = PresetManager.create_default_presets()
+        
+        # Colors for area visualization
+        self.area_colors = {
+            "art_area": (255, 0, 0),     # Red
+            "text_area": (0, 255, 0),    # Green  
+            "border_area": (0, 0, 255),  # Blue
+            "name_area": (255, 255, 0)   # Yellow
+        }
+        
+        # Load first image
+        self.load_current_image()
+        
+        # Output areas
+        self.selection_output = Output()
+        self.comparison_output = Output()
+        
+    def load_current_image(self):
+        """Load current image and initialize tools"""
+        if not self.enhancer.images:
+            return None
+            
+        img = self.enhancer.load_image(self.current_image_idx)
+        if img is not None:
+            self.selection_tool = SelectionTool(img)
+            self.selective_enhancer = SelectiveEnhancer(img)
+            
+            # Apply current preset
+            if self.current_preset in self.presets:
+                self.selection_tool.apply_preset(self.presets[self.current_preset])
+                
+        return img
+    
+    def create_interface(self):
+        """Create the complete interface with organized layout"""
+        
+        if not self.enhancer.images:
+            return HTML("<h3>❌ No images found. Add images to input folder first.</h3>")
+        
+        # Header
+        header = HTML("<h2>🎯 MTG Selective Area Enhancement Tool</h2>")
+        
+        # 1. Selective Area Tool (Top)
+        selective_section = self.create_selective_area_section()
+        
+        # 2. Display of Selection 
+        display_section = VBox([
+            HTML("<h3>📊 Selection Display</h3>"),
+            self.selection_output
+        ])
+        
+        # 3. Image Processing Sliders
+        slider_section = self.create_slider_section()
+        
+        # 4. Live Comparison
+        comparison_section = VBox([
+            HTML("<h3>🔍 Live Comparison</h3>"),
+            self.comparison_output
+        ])
+        
+        # 5. Processing Buttons (Bottom)
+        button_section = self.create_button_section()
+        
+        # Navigation controls
+        nav_section = self.create_navigation_section()
+        
+        # Complete interface layout
+        interface = VBox([
+            header,
+            nav_section,
+            HTML("<hr>"),
+            selective_section,
+            HTML("<hr>"),
+            display_section,
+            HTML("<hr>"),
+            slider_section,
+            HTML("<hr>"),
+            comparison_section,
+            HTML("<hr>"),
+            button_section
+        ])
+        
+        # Initial updates
+        self.update_selection_display()
+        self.update_live_comparison()
+        
+        return interface
+    
+    def create_navigation_section(self):
+        """Create image navigation controls"""
+        self.prev_btn = Button(description="◀ Previous", button_style='info', 
+                              layout={'width': '100px'})
+        self.next_btn = Button(description="Next ▶", button_style='info', 
+                              layout={'width': '100px'})
+        
+        filename = self.enhancer.images[self.current_image_idx]
+        self.img_info = HTML(f"<b>Image {self.current_image_idx + 1} of {len(self.enhancer.images)}</b>: {filename}")
+        
+        # Connect navigation events
+        self.prev_btn.on_click(self.on_prev_image)
+        self.next_btn.on_click(self.on_next_image)
+        
+        return VBox([
+            HTML("<h3>🖼️ Image Navigation</h3>"),
+            HBox([self.prev_btn, self.next_btn]),
+            self.img_info
+        ])
+    
+    def create_selective_area_section(self):
+        """Create selective area tool section with 5 presets"""
+        
+        # Preset selector with 5 options
+        self.preset_selector = Dropdown(
+            options=["normal", "art", "full art", "planes1", "planes2"],
+            value="normal",
+            description='Card Type:',
+            style={'description_width': '80px'},
+            layout={'width': '200px'}
+        )
+        
+        # Info display about current preset
+        self.preset_info = HTML(self.get_preset_info_html())
+        
+        # Connect preset change event
+        self.preset_selector.observe(self.on_preset_change, names='value')
+        
+        return VBox([
+            HTML("<h3>🎯 1. Selective Area Tool</h3>"),
+            HTML("<p>Choose a card type preset to select all 4 areas (art, text, border, name) at once:</p>"),
+            HBox([
+                HTML("<b>Select Preset:</b>"),
+                self.preset_selector
+            ]),
+            self.preset_info,
+            HTML("<p><i>Note: Selecting a preset replaces all current area selections</i></p>")
+        ])
+    
+    def create_slider_section(self):
+        """Create image processing sliders section"""
+        
+        # Enhancement sliders
+        self.gamma_slider = FloatSlider(
+            value=1.0, min=0.5, max=3.0, step=0.05, 
+            description="Gamma:",
+            style={'description_width': '100px'}, 
+            layout={'width': '400px'}
+        )
+        
+        self.brightness_slider = FloatSlider(
+            value=0, min=-50, max=50, step=1,
+            description="Brightness:",
+            style={'description_width': '100px'}, 
+            layout={'width': '400px'}
+        )
+        
+        self.contrast_slider = FloatSlider(
+            value=1.0, min=0.5, max=2.5, step=0.05,
+            description="Contrast:",
+            style={'description_width': '100px'}, 
+            layout={'width': '400px'}
+        )
+        
+        self.clahe_slider = FloatSlider(
+            value=2.0, min=0, max=8, step=0.1,
+            description="CLAHE:",
+            style={'description_width': '100px'}, 
+            layout={'width': '400px'}
+        )
+        
+        self.saturation_slider = FloatSlider(
+            value=1.0, min=0, max=3, step=0.05,
+            description="Saturation:",
+            style={'description_width': '100px'}, 
+            layout={'width': '400px'}
+        )
+        
+        self.preserve_black = Checkbox(
+            value=True,
+            description="Preserve Black Pixels",
+            style={'description_width': '150px'}
+        )
+        
+        self.black_threshold = IntSlider(
+            value=15, min=5, max=50, step=1,
+            description="Black Threshold:",
+            style={'description_width': '100px'}, 
+            layout={'width': '400px'}
+        )
+        
+        # Connect sliders to live update
+        sliders = [self.gamma_slider, self.brightness_slider, self.contrast_slider, 
+                  self.clahe_slider, self.saturation_slider, self.preserve_black, self.black_threshold]
+        
+        for slider in sliders:
+            slider.observe(self.on_slider_change, names='value')
+        
+        # Preset enhancement buttons
+        art_settings_btn = Button(description="🎨 Art Settings", button_style='info', 
+                                 layout={'width': '140px'})
+        text_settings_btn = Button(description="📝 Text Settings", button_style='info', 
+                                  layout={'width': '140px'})
+        reset_btn = Button(description="🔄 Reset", button_style='warning', 
+                          layout={'width': '100px'})
+        
+        art_settings_btn.on_click(self.on_art_settings)
+        text_settings_btn.on_click(self.on_text_settings)
+        reset_btn.on_click(self.on_reset_settings)
+        
+        return VBox([
+            HTML("<h3>⚙️ 3. Image Processing Sliders</h3>"),
+            HTML("<p>Adjust settings - preview updates automatically:</p>"),
+            HBox([art_settings_btn, text_settings_btn, reset_btn]),
+            HTML("<h4>Enhancement Controls:</h4>"),
+            HBox([self.gamma_slider, self.brightness_slider]),
+            HBox([self.contrast_slider, self.clahe_slider]),
+            self.saturation_slider,
+            HTML("<h4>Black Pixel Preservation:</h4>"),
+            HBox([self.preserve_black, self.black_threshold])
+        ])
+    
+    def create_button_section(self):
+        """Create processing buttons section"""
+        
+        self.apply_btn = Button(
+            description="✅ Apply Enhancement", 
+            button_style='success',
+            layout={'width': '180px', 'height': '40px'}
+        )
+        
+        self.save_btn = Button(
+            description="💾 Save Result", 
+            button_style='primary',
+            layout={'width': '150px', 'height': '40px'}
+        )
+        
+        self.save_comparison_btn = Button(
+            description="📸 Save Comparison", 
+            button_style='info',
+            layout={'width': '160px', 'height': '40px'}
+        )
+        
+        # Status display
+        self.status_display = HTML("<p><i>Ready to enhance</i></p>")
+        
+        # Connect button events
+        self.apply_btn.on_click(self.on_apply_enhancement)
+        self.save_btn.on_click(self.on_save_result)
+        self.save_comparison_btn.on_click(self.on_save_comparison)
+        
+        return VBox([
+            HTML("<h3>🚀 5. Processing Buttons</h3>"),
+            HBox([self.apply_btn, self.save_btn, self.save_comparison_btn]),
+            self.status_display
+        ])
+    
+    # Event Handlers
+    def on_prev_image(self, b):
+        """Navigate to previous image"""
+        if self.current_image_idx > 0:
+            self.current_image_idx -= 1
+        else:
+            self.current_image_idx = len(self.enhancer.images) - 1
+        
+        self.update_image_info()
+        self.load_current_image()
+        self.update_selection_display()
+        self.update_live_comparison()
+    
+    def on_next_image(self, b):
+        """Navigate to next image"""
+        if self.current_image_idx < len(self.enhancer.images) - 1:
+            self.current_image_idx += 1
+        else:
+            self.current_image_idx = 0
+        
+        self.update_image_info()
+        self.load_current_image()
+        self.update_selection_display()
+        self.update_live_comparison()
+    
+    def on_preset_change(self, change):
+        """Handle preset selection change"""
+        if change['type'] == 'change' and change['name'] == 'value':
+            self.current_preset = change['new']
+            
+            # Apply new preset to current image
+            if self.selection_tool and self.current_preset in self.presets:
+                self.selection_tool.apply_preset(self.presets[self.current_preset])
+                
+            # Update displays
+            self.preset_info.value = self.get_preset_info_html()
+            self.update_selection_display()
+            self.update_live_comparison()
+    
+    def on_slider_change(self, change):
+        """Handle slider value changes for live preview"""
+        if change['type'] == 'change' and change['name'] == 'value':
+            # Update live comparison with new settings
+            self.update_live_comparison()
+    
+    def on_art_settings(self, b):
+        """Apply settings optimized for art areas"""
+        self.gamma_slider.value = 1.1
+        self.brightness_slider.value = 5
+        self.contrast_slider.value = 1.2
+        self.clahe_slider.value = 2.5
+        self.saturation_slider.value = 1.3
+    
+    def on_text_settings(self, b):
+        """Apply settings optimized for text areas"""
+        self.gamma_slider.value = 1.0
+        self.brightness_slider.value = 0
+        self.contrast_slider.value = 1.4
+        self.clahe_slider.value = 3.0
+        self.saturation_slider.value = 1.0
+    
+    def on_reset_settings(self, b):
+        """Reset all settings to default"""
+        self.gamma_slider.value = 1.0
+        self.brightness_slider.value = 0
+        self.contrast_slider.value = 1.0
+        self.clahe_slider.value = 2.0
+        self.saturation_slider.value = 1.0
+        self.preserve_black.value = True
+        self.black_threshold.value = 15
+    
+    def on_apply_enhancement(self, b):
+        """Apply enhancement to all selected areas"""
+        if not self.selection_tool or not self.selective_enhancer:
+            self.status_display.value = "<p style='color: red;'>❌ No image loaded</p>"
+            return
+        
+        try:
+            # Get current settings
+            settings = self.get_current_settings()
+            
+            # Apply to all selected areas
+            selections = self.selection_tool.get_all_selections()
+            self.enhanced_result = self.selective_enhancer.apply_to_all_areas(selections, settings)
+            
+            self.status_display.value = "<p style='color: green;'>✅ Enhancement applied successfully!</p>"
+            
+            # Update comparison display
+            self.update_live_comparison()
+            
+        except Exception as e:
+            self.status_display.value = f"<p style='color: red;'>❌ Error: {e}</p>"
+    
+    def on_save_result(self, b):
+        """Save the enhanced result"""
+        if self.enhanced_result is None:
+            self.status_display.value = "<p style='color: red;'>❌ No enhanced result to save. Apply enhancement first.</p>"
+            return
+        
+        try:
+            filename = self.enhancer.images[self.current_image_idx]
+            name, ext = os.path.splitext(filename)
+            output_filename = f"selective_{name}{ext}"
+            
+            success = self.enhancer.save_image(self.enhanced_result, output_filename)
+            
+            if success:
+                self.status_display.value = f"<p style='color: green;'>✅ Saved: {output_filename}</p>"
+            else:
+                self.status_display.value = "<p style='color: red;'>❌ Failed to save image</p>"
+                
+        except Exception as e:
+            self.status_display.value = f"<p style='color: red;'>❌ Save error: {e}</p>"
+    
+    def on_save_comparison(self, b):
+        """Save side-by-side comparison image"""
+        if not self.selection_tool:
+            self.status_display.value = "<p style='color: red;'>❌ No image loaded</p>"
+            return
+        
+        try:
+            original = self.selection_tool.image
+            
+            # Use enhanced result if available, otherwise create preview
+            if self.enhanced_result is not None:
+                enhanced = self.enhanced_result
+            else:
+                settings = self.get_current_settings()
+                selections = self.selection_tool.get_all_selections()
+                enhanced = self.selective_enhancer.apply_to_all_areas(selections, settings)
+            
+            # Create side-by-side comparison
+            comparison = self.create_side_by_side_comparison(original, enhanced)
+            
+            filename = self.enhancer.images[self.current_image_idx]
+            name, _ = os.path.splitext(filename)
+            comparison_filename = f"comparison_{name}.jpg"
+            
+            success = self.enhancer.save_image(comparison, comparison_filename)
+            
+            if success:
+                self.status_display.value = f"<p style='color: green;'>✅ Comparison saved: {comparison_filename}</p>"
+            else:
+                self.status_display.value = "<p style='color: red;'>❌ Failed to save comparison</p>"
+                
+        except Exception as e:
+            self.status_display.value = f"<p style='color: red;'>❌ Comparison save error: {e}</p>"
+    
+    # Helper Methods
+    def get_current_settings(self) -> EnhancementSettings:
+        """Get current enhancement settings from sliders"""
+        return EnhancementSettings(
+            gamma=self.gamma_slider.value,
+            brightness=self.brightness_slider.value,
+            contrast=self.contrast_slider.value,
+            clahe=self.clahe_slider.value,
+            saturation=self.saturation_slider.value,
+            preserve_black=self.preserve_black.value,
+            black_threshold=self.black_threshold.value
+        )
+    
+    def update_image_info(self):
+        """Update image information display"""
+        filename = self.enhancer.images[self.current_image_idx]
+        self.img_info.value = f"<b>Image {self.current_image_idx + 1} of {len(self.enhancer.images)}</b>: {filename}"
+    
+    def get_preset_info_html(self) -> str:
+        """Get HTML info about current preset"""
+        if self.current_preset not in self.presets:
+            return "<p>No preset selected</p>"
+        
+        preset = self.presets[self.current_preset]
+        
+        if self.current_preset in ["planes1", "planes2"]:
+            note = " <i>(PLACEHOLDER - you will specify coordinates)</i>"
+        else:
+            note = ""
+        
+        return f"""
+        <div style='background: #f0f0f0; padding: 10px; border-radius: 5px; margin: 10px 0;'>
+            <b>Current Preset: {preset.name.title()}</b>{note}
+            <br><small>Areas: Art, Text, Border, Name (all selected simultaneously)</small>
+        </div>
+        """
+    
+    def update_selection_display(self):
+        """Update the selection display with colored overlays"""
+        with self.selection_output:
+            clear_output()
+            
+            if not self.selection_tool:
+                print("No image loaded")
+                return
+            
+            try:
+                self.show_all_areas_overlay()
+            except Exception as e:
+                print(f"Error displaying selections: {e}")
+    
+    def show_all_areas_overlay(self):
+        """Show all 4 areas with colored overlays on one image"""
+        if not self.selection_tool:
+            return
+        
+        # Get original image in RGB
+        img = cv2.cvtColor(self.selection_tool.image, cv2.COLOR_BGR2RGB)
+        overlay = img.copy().astype(np.float32)
+        
+        # Get all selections
+        selections = self.selection_tool.get_all_selections()
+        
+        if not selections:
+            print("No areas selected")
+            return
+        
+        # Apply colored overlays for each area
+        alpha = 0.3
+        legend_info = []
+        
+        for area_name, mask in selections.items():
+            if np.sum(mask) > 0:  # Only if area has content
+                color = self.area_colors.get(area_name, (128, 128, 128))
+                
+                # Create colored overlay
+                colored_mask = np.zeros_like(img, dtype=np.float32)
+                for c in range(3):
+                    colored_mask[:, :, c] = mask * color[c]
+                
+                # Apply overlay where mask is active
+                mask_3d = mask.astype(np.float32)[..., None] / 255.0
+                overlay = overlay * (1 - mask_3d * alpha) + colored_mask * alpha
+                
+                # Add to legend
+                selected_pixels = np.sum(mask > 0)
+                total_pixels = mask.shape[0] * mask.shape[1]
+                percentage = (selected_pixels / total_pixels) * 100
+                
+                color_name = area_name.replace('_', ' ').title()
+                legend_info.append(f"{color_name}: {percentage:.1f}%")
+        
+        overlay = np.clip(overlay, 0, 255).astype(np.uint8)
+        
+        # Display the overlay
+        fig, ax = plt.subplots(figsize=(10, 8))
+        ax.imshow(overlay)
+        ax.set_title(f"All Selected Areas - Preset: {self.current_preset.title()}", fontsize=14)
+        ax.axis('off')
+        
+        # Add legend with color coding
+        if legend_info:
+            legend_text = "Selected Areas:\n" + "\n".join([
+                f"🔴 {legend_info[0] if len(legend_info) > 0 else ''}",
+                f"🟢 {legend_info[1] if len(legend_info) > 1 else ''}",
+                f"🔵 {legend_info[2] if len(legend_info) > 2 else ''}",
+                f"🟡 {legend_info[3] if len(legend_info) > 3 else ''}"
+            ])
+            
+            ax.text(0.02, 0.98, legend_text, transform=ax.transAxes,
+                    verticalalignment='top', fontsize=10,
+                    bbox=dict(boxstyle="round,pad=0.5", facecolor='white', alpha=0.9))
+        
+        plt.tight_layout()
+        plt.show()
+        
+        print(f"📊 Preset '{self.current_preset}' applied - {len(selections)} areas selected")
+
+# Main interface creation function
+def create_selective_interface(enhancer: MTGProxyEnhancer):
+    """
+    Create the MTG selective enhancement interface
+    
+    Args:
+        enhancer: MTGProxyEnhancer instance
+        
+    Returns:
+        Complete interface widget
+    """
+    interface = MTGSelectiveInterface(enhancer)
+    return interface.create_interface()
+
+if __name__ == "__main__":
+    print("🎯 MTG Interface Module Part 1 Loaded!")
+    print("Use: create_selective_interface(enhancer) to create the interface")
+
+###########################################################################################################################################################
+#!/usr/bin/env python3
+"""
+MTG Proxy Enhancer - Interface Module Part 2
+Live comparison and utility methods for the interface
+"""
+
+# Import from previous modules
+#from mtg_core_part1 import EnhancementSettings
+#from mtg_interface_part1 import MTGSelectiveInterface
+
+# Extend the MTGSelectiveInterface class with comparison methods
+class MTGSelectiveInterfaceExtended(MTGSelectiveInterface):
+    """Extended interface with live comparison and utility methods"""
+    
+    def update_live_comparison(self):
+        """Update the live comparison display with current settings"""
+        with self.comparison_output:
+            clear_output()
+            
+            if not self.selection_tool or not self.selective_enhancer:
+                print("No image loaded for comparison")
+                return
+            
+            try:
+                self.show_live_comparison()
+            except Exception as e:
+                print(f"Error updating comparison: {e}")
+    
+    def show_live_comparison(self):
+        """Show side-by-side comparison with current slider settings"""
+        # Get original image
+        original = cv2.cvtColor(self.selection_tool.image, cv2.COLOR_BGR2RGB)
+        
+        # Get current settings and apply enhancement
+        settings = self.get_current_settings()
+        selections = self.selection_tool.get_all_selections()
+        
+        # Create enhanced version with current settings
+        enhanced_bgr = self.selective_enhancer.apply_to_all_areas(selections, settings)
+        enhanced = cv2.cvtColor(enhanced_bgr, cv2.COLOR_BGR2RGB)
+        
+        # Create side-by-side comparison
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
+        
+        # Original image
+        ax1.imshow(original)
+        ax1.set_title("Original", fontsize=14, fontweight='bold')
+        ax1.axis('off')
+        
+        # Enhanced image  
+        ax2.imshow(enhanced)
+        ax2.set_title("Enhanced (Live Preview)", fontsize=14, fontweight='bold')
+        ax2.axis('off')
+        
+        # Add settings info as text
+        settings_text = self.get_settings_summary()
+        fig.text(0.02, 0.02, settings_text, fontsize=9, fontfamily='monospace',
+                bbox=dict(boxstyle="round,pad=0.3", facecolor='lightgray', alpha=0.8))
+        
+        plt.tight_layout()
+        plt.show()
+        
+        # Show enhancement statistics
+        self.show_enhancement_stats(original, enhanced)
+    
+    def get_settings_summary(self) -> str:
+        """Get current settings as formatted string"""
+        settings = self.get_current_settings()
+        
+        return f"""Current Settings:
+Gamma: {settings.gamma:.2f}
+Brightness: {settings.brightness:+.0f}
+Contrast: {settings.contrast:.2f}
+CLAHE: {settings.clahe:.1f}
+Saturation: {settings.saturation:.2f}
+Preserve Black: {settings.preserve_black}
+Preset: {self.current_preset}"""
+    
+    def show_enhancement_stats(self, original: np.ndarray, enhanced: np.ndarray):
+        """Show statistics about the enhancement"""
+        try:
+            # Calculate basic statistics
+            orig_brightness = np.mean(original)
+            enh_brightness = np.mean(enhanced)
+            
+            orig_contrast = np.std(original)
+            enh_contrast = np.std(enhanced)
+            
+            # Calculate changes
+            brightness_change = enh_brightness - orig_brightness
+            contrast_change = ((enh_contrast - orig_contrast) / orig_contrast * 100) if orig_contrast > 0 else 0
+            
+            # Count selected pixels
+            selections = self.selection_tool.get_all_selections()
+            total_selected = sum(np.sum(mask > 0) for mask in selections.values())
+            total_pixels = original.shape[0] * original.shape[1]
+            coverage = (total_selected / total_pixels) * 100
+            
+            print(f"\n📊 Enhancement Statistics:")
+            print(f"   Brightness change: {brightness_change:+.1f}")
+            print(f"   Contrast change: {contrast_change:+.1f}%")
+            print(f"   Area coverage: {coverage:.1f}% of image")
+            print(f"   Selected areas: {len(selections)}")
+            
+        except Exception as e:
+            print(f"Could not calculate statistics: {e}")
+    
+    def create_side_by_side_comparison(self, original: np.ndarray, enhanced: np.ndarray) -> np.ndarray:
+        """Create side-by-side comparison image for saving"""
+        h, w = original.shape[:2]
+        
+        # Create comparison canvas
+        comparison = np.zeros((h, w * 2, 3), dtype=np.uint8)
+        comparison[:, :w] = original
+        comparison[:, w:] = enhanced
+        
+        # Add dividing line
+        cv2.line(comparison, (w, 0), (w, h), (255, 255, 255), 3)
+        
+        # Add labels
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = max(0.7, min(w, h) / 800)
+        thickness = max(1, int(font_scale * 2))
+        
+        # Original label
+        cv2.putText(comparison, "ORIGINAL", (20, 40), font, font_scale, 
+                   (255, 255, 255), thickness)
+        
+        # Enhanced label with preset info
+        label_text = f"ENHANCED ({self.current_preset.upper()})"
+        cv2.putText(comparison, label_text, (w + 20, 40), font, font_scale, 
+                   (255, 255, 255), thickness)
+        
+        # Add settings summary at bottom
+        settings_lines = [
+            f"Gamma: {self.gamma_slider.value:.2f}",
+            f"Brightness: {self.brightness_slider.value:+.0f}",
+            f"Contrast: {self.contrast_slider.value:.2f}",
+            f"CLAHE: {self.clahe_slider.value:.1f}",
+            f"Saturation: {self.saturation_slider.value:.2f}"
+        ]
+        
+        y_pos = h - 20
+        for i, line in enumerate(settings_lines):
+            cv2.putText(comparison, line, (20, y_pos - i * 25), font, font_scale * 0.6, 
+                       (200, 200, 200), max(1, thickness - 1))
+        
+        return comparison
+    
+    def validate_enhancement_settings(self) -> Tuple[bool, List[str]]:
+        """Validate current enhancement settings and return warnings"""
+        settings = self.get_current_settings()
+        warnings = []
+        
+        # Check for extreme values that might cause issues
+        if settings.gamma < 0.7 or settings.gamma > 2.5:
+            warnings.append(f"Extreme gamma value ({settings.gamma:.2f}) may cause artifacts")
+        
+        if abs(settings.brightness) > 40:
+            warnings.append(f"High brightness change ({settings.brightness:+.0f}) may clip values")
+        
+        if settings.contrast > 2.0:
+            warnings.append(f"High contrast ({settings.contrast:.2f}) may cause harsh transitions")
+        
+        if settings.clahe > 6.0:
+            warnings.append(f"High CLAHE ({settings.clahe:.1f}) may cause noise amplification")
+        
+        if settings.saturation > 2.0:
+            warnings.append(f"High saturation ({settings.saturation:.2f}) may cause oversaturation")
+        
+        # Check if any areas are selected
+        selections = self.selection_tool.get_all_selections() if self.selection_tool else {}
+        if not selections or all(np.sum(mask) == 0 for mask in selections.values()):
+            warnings.append("No areas selected - enhancement will have no effect")
+        
+        return len(warnings) == 0, warnings
+    
+    def show_enhancement_warnings(self):
+        """Display warnings about current settings if any"""
+        is_valid, warnings = self.validate_enhancement_settings()
+        
+        if not is_valid:
+            warning_text = "⚠️ Enhancement Warnings:\n" + "\n".join([f"• {w}" for w in warnings])
+            self.status_display.value = f"<p style='color: orange;'>{warning_text.replace(chr(10), '<br>')}</p>"
+        else:
+            self.status_display.value = "<p style='color: green;'>✅ Settings look good</p>"
+    
+    def export_current_preset(self) -> Dict:
+        """Export current preset configuration"""
+        if not self.selection_tool:
+            return {}
+        
+        preset_data = {
+            'preset_name': self.current_preset,
+            'enhancement_settings': {
+                'gamma': self.gamma_slider.value,
+                'brightness': self.brightness_slider.value,
+                'contrast': self.contrast_slider.value,
+                'clahe': self.clahe_slider.value,
+                'saturation': self.saturation_slider.value,
+                'preserve_black': self.preserve_black.value,
+                'black_threshold': self.black_threshold.value
+            },
+            'image_info': {
+                'filename': self.enhancer.images[self.current_image_idx],
+                'index': self.current_image_idx,
+                'total_images': len(self.enhancer.images)
+            },
+            'export_timestamp': time.time()
+        }
+        
+        return preset_data
+    
+    def save_preset_config(self):
+        """Save current configuration to file"""
+        try:
+            config = self.export_current_preset()
+            filename = f"preset_config_{self.current_preset}_{int(time.time())}.json"
+            
+            with open(filename, 'w') as f:
+                json.dump(config, f, indent=2)
+            
+            self.status_display.value = f"<p style='color: green;'>✅ Configuration saved: {filename}</p>"
+            
+        except Exception as e:
+            self.status_display.value = f"<p style='color: red;'>❌ Failed to save config: {e}</p>"
+    
+    def batch_preview_mode(self, num_images: int = 3):
+        """Show preview of enhancement on multiple images"""
+        if num_images > len(self.enhancer.images):
+            num_images = len(self.enhancer.images)
+        
+        settings = self.get_current_settings()
+        
+        fig, axes = plt.subplots(2, num_images, figsize=(6 * num_images, 8))
+        if num_images == 1:
+            axes = axes.reshape(2, 1)
+        
+        for i in range(num_images):
+            # Load image
+            img = self.enhancer.load_image(i)
+            if img is None:
+                continue
+            
+            # Create tools for this image
+            selection_tool = SelectionTool(img)
+            selective_enhancer = SelectiveEnhancer(img)
+            
+            # Apply current preset
+            if self.current_preset in self.presets:
+                selection_tool.apply_preset(self.presets[self.current_preset])
+            
+            # Get enhanced version
+            selections = selection_tool.get_all_selections()
+            enhanced = selective_enhancer.apply_to_all_areas(selections, settings)
+            
+            # Convert to RGB for display
+            original_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            enhanced_rgb = cv2.cvtColor(enhanced, cv2.COLOR_BGR2RGB)
+            
+            # Display original
+            axes[0, i].imshow(original_rgb)
+            axes[0, i].set_title(f"Original {i+1}")
+            axes[0, i].axis('off')
+            
+            # Display enhanced
+            axes[1, i].imshow(enhanced_rgb)
+            axes[1, i].set_title(f"Enhanced {i+1}")
+            axes[1, i].axis('off')
+        
+        plt.suptitle(f"Batch Preview - Preset: {self.current_preset}", fontsize=16)
+        plt.tight_layout()
+        plt.show()
+        
+        print(f"📸 Batch preview showing {num_images} images with current settings")
+
+# Additional utility functions
+def create_enhanced_selective_interface(enhancer):
+    """Create the enhanced selective interface with all features"""
+    interface = MTGSelectiveInterfaceExtended(enhancer)
+    return interface.create_interface()
+
+def quick_enhancement_demo():
+    """Quick demo of the enhancement interface"""
+    print("🎯 MTG Selective Enhancement Demo")
+    print("=" * 50)
+    
+    try:
+        # Create enhancer
+        enhancer = create_mtg_enhancer_optimized()
+        
+        if not enhancer.images:
+            print("❌ No images found. Add images to 'mtgproxy/Input' folder.")
+            return
+        
+        print(f"✅ Found {len(enhancer.images)} images")
+        
+        # Create and display interface
+        interface = create_enhanced_selective_interface(enhancer)
+        display(interface)
+        
+        print("\n💡 Interface Layout:")
+        print("1. 🎯 Selective Area Tool - Choose card type preset")
+        print("2. 📊 Selection Display - View all 4 selected areas")
+        print("3. ⚙️ Image Processing Sliders - Adjust enhancement")
+        print("4. 🔍 Live Comparison - Real-time before/after")
+        print("5. 🚀 Processing Buttons - Apply and save results")
+        
+    except Exception as e:
+        print(f"❌ Demo failed: {e}")
+
+def print_interface_help():
+    """Print detailed help for the interface"""
+    print("""
+🎯 MTG Selective Enhancement Interface - Complete Guide
+
+📋 INTERFACE SECTIONS:
+
+1. 🎯 SELECTIVE AREA TOOL
+   • Choose from 5 card type presets
+   • Each preset selects 4 areas: art, text, border, name
+   • Selecting a preset replaces all current selections
+   
+2. 📊 SELECTION DISPLAY  
+   • Shows all 4 selected areas with colored overlays
+   • Red: Art area, Green: Text area, Blue: Border area, Yellow: Name area
+   • Displays percentage coverage for each area
+
+3. ⚙️ IMAGE PROCESSING SLIDERS
+   • Real-time adjustment of enhancement settings
+   • Art Settings: Optimized for artwork enhancement
+   • Text Settings: Optimized for text readability
+   • All changes update the live preview automatically
+
+4. 🔍 LIVE COMPARISON
+   • Side-by-side original vs enhanced preview
+   • Updates automatically when sliders change
+   • Shows current settings and statistics
+
+5. 🚀 PROCESSING BUTTONS
+   • Apply Enhancement: Process with current settings
+   • Save Result: Save enhanced image
+   • Save Comparison: Save side-by-side comparison
+
+🎮 WORKFLOW:
+1. Choose card type preset (normal, art, full art, planes1, planes2)
+2. Adjust enhancement sliders while watching live preview
+3. Click "Apply Enhancement" when satisfied
+4. Save your results
+
+📋 PRESETS:
+• normal: Standard MTG card layout
+• art: Larger art area for art-focused cards  
+• full art: Full art cards with minimal text
+• planes1: Planeswalker layout type 1 (coordinates TBD)
+• planes2: Planeswalker layout type 2 (coordinates TBD)
+""")
+
+if __name__ == "__main__":
+    print("🎯 MTG Interface Module Part 2 Loaded!")
+    print("Use: create_enhanced_selective_interface(enhancer) for full interface")
+    print("Or run: quick_enhancement_demo() for a quick demo")
+#############################################################################################################################################################################
+#!/usr/bin/env python3
+"""
+MTG Proxy Enhancer - Main Entry Point
+Combines all modules and provides easy startup
+"""
+
+# Import all modules
+#from mtg_core_part1 import (
+#    MTGProxyEnhancer, EnhancementSettings, PresetManager, 
+#    SelectionTool, SelectiveEnhancer, create_mtg_enhancer_optimized,
+#    print_usage
+#)
+
+#from mtg_interface_part1 import create_selective_interface
+#from mtg_interface_part2 import (
+#    create_enhanced_selective_interface, quick_enhancement_demo,
+#    print_interface_help
+#)
+
+def main():
+    """Main entry point for the MTG Enhancer"""
+    print("🃏 MTG Proxy Enhancer - Optimized Modular Version")
+    print("=" * 60)
+    
+    try:
+        # Create enhancer instance
+        enhancer = create_mtg_enhancer_optimized()
+        
+        if not enhancer.images:
+            print("📂 No images found in input folder")
+            print("💡 Add MTG card images to 'mtgproxy/Input' folder")
+            print("\n📚 Available presets:")
+            presets = PresetManager.create_preset_settings()
+            for name in presets.keys():
+                print(f"   • {name}")
+            return
+        
+        print(f"✅ Found {len(enhancer.images)} images")
+        print(f"📁 Input: {enhancer.input_folder}")
+        print(f"📁 Output: {enhancer.output_folder}")
+        
+        print("\n🎯 Starting Selective Enhancement Interface...")
+        
+        # Create and display the interface
+        interface = create_enhanced_selective_interface(enhancer)
+        display(interface)
+        
+        print("\n✨ Interface loaded successfully!")
+        print("\n💡 Quick Tips:")
+        print("   1. Choose a card type preset (normal, art, full art, etc.)")
+        print("   2. Watch the live comparison as you adjust sliders")
+        print("   3. Click 'Apply Enhancement' when satisfied")
+        print("   4. Save your results!")
+        
+    except Exception as e:
+        print(f"❌ Error starting enhancer: {e}")
+        print("\n📚 For help, run: print_interface_help()")
+
+def quick_start():
+    """Quick start with minimal setup"""
+    enhancer = create_mtg_enhancer_optimized()
+    
+    if enhancer.images:
+        interface = create_enhanced_selective_interface(enhancer)
+        display(interface)
+        return interface
+    else:
+        print("📂 Add images to 'mtgproxy/Input' folder first")
+        return None
+
+def create_interface_only():
+    """Create interface without auto-display (for custom usage)"""
+    enhancer = create_mtg_enhancer_optimized()
+    return create_enhanced_selective_interface(enhancer)
+
+# Convenience functions for different use cases
+def demo():
+    """Run the demo"""
+    quick_enhancement_demo()
+
+def help():
+    """Show help"""
+    print_interface_help()
+
+def usage():
+    """Show usage"""
+    print_usage()
+
+# Check if running as main module
+if __name__ == "__main__":
+    # Check if in Jupyter environment
+    try:
+        from IPython import get_ipython
+        if get_ipython() is not None:
+            # Running in Jupyter - start interface
+            main()
+        else:
+            # Running as script
+            print("🃏 MTG Proxy Enhancer")
+            print("Run in Jupyter notebook for best experience")
+            print("Available functions: main(), demo(), help(), usage()")
+    except ImportError:
+        # Not in IPython environment
+        print("🃏 MTG Proxy Enhancer")
+        print("Please run in Jupyter notebook for interactive interface")
+
+# Module information
+print("🃏 MTG Proxy Enhancer - Main Module Loaded!")
+print("\n🚀 QUICK START:")
+print("• main() - Start the complete interface")
+print("• quick_start() - Minimal setup and start")
+print("• demo() - Run demonstration")
+print("• help() - Show detailed help")
+print("• usage() - Show usage instructions")
+
+print("\n📦 MODULES LOADED:")
+print("✅ Core Part 1 - Basic functionality and presets")
+print("✅ Interface Part 1 - Main interface components")  
+print("✅ Interface Part 2 - Live comparison and utilities")
+print("✅ Main - Entry point and convenience functions")
+
+print("\n🎯 FEATURES:")
+print("• 5 card type presets (normal, art, full art, planes1, planes2)")
+print("• 4-area selection per preset (art, text, border, name)")
+print("• Real-time live comparison")
+print("• Multi-colored area visualization")
+print("• Modular 500-line segments")
+print("• No GPU dependencies")
+print("• Simplified, focused interface")
+
+print(f"\n📋 PRESET COORDINATES:")
+print("• normal, art, full art: ✅ Configured")
+print("• planes1, planes2: ⚠️ PLACEHOLDER (you will specify)")
+
+  
+  
